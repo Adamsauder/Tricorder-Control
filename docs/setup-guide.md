@@ -111,8 +111,8 @@ ESPAsyncWebServer // Web server
 
 **WiFi Settings** (in `firmware/tricorder_firmware.ino`):
 ```cpp
-const char* WIFI_SSID = "YOUR_WIFI_NETWORK";
-const char* WIFI_PASSWORD = "your_password";
+const char* WIFI_SSID = "Rigging Electrics";
+const char* WIFI_PASSWORD = "academy123";
 ```
 
 **Server Settings** (in `server/app.py`):
@@ -127,27 +127,45 @@ CONFIG = {
 
 ### 2. Hardware Pin Configuration
 
-**ESP32 Pin Mapping** (in `firmware/tricorder_firmware.ino`):
+**ESP32-2432S032C-I Board Configuration:**
 ```cpp
-#define LED_PIN 2       // NeoPixel data pin
-#define NUM_LEDS 12     // Number of LEDs
-#define SD_CS 5         // SD card chip select
-#define TFT_CS 15       // Display chip select
-#define TFT_DC 2        // Display data/command
-#define TFT_RST 4       // Display reset
+// The ESP32-2432S032C-I has built-in display and SD card
+// External NeoPixel strip connection only
+#define LED_PIN 2       // NeoPixel data pin (external connection)
+#define NUM_LEDS 12     // Number of LEDs in strip
+#define SD_CS 5         // SD card chip select (built-in)
 ```
+
+**External Hardware Connections:**
+- NeoPixel strip data wire → GPIO2
+- NeoPixel strip power → External 5V supply
+- NeoPixel strip ground → ESP32 ground
 
 ### 3. Display Configuration
 
-**TFT_eSPI Configuration** (create `firmware/User_Setup.h`):
+**TFT_eSPI Configuration for ESP32-2432S032C-I:**
+
+The ESP32-2432S032C-I board has a built-in 3.2" display. Create or modify the TFT_eSPI library configuration:
+
+1. **Arduino Libraries Folder**: Navigate to `Arduino/libraries/TFT_eSPI/`
+2. **Edit User_Setup_Select.h**: Comment out `#include <User_Setup.h>` and uncomment a suitable setup
+3. **Or create User_Setup.h**:
+
 ```cpp
-#define ILI9341_DRIVER    // Display driver type
-#define TFT_MISO 19
-#define TFT_MOSI 23
-#define TFT_SCLK 18
+// ESP32-2432S032C-I Configuration
+#define ST7789_DRIVER      // Display driver for 3.2" IPS LCD
+#define TFT_WIDTH  240     // Display width
+#define TFT_HEIGHT 320     // Display height
+
+// Pin definitions (hardware specific for this board)
+#define TFT_MOSI 13
+#define TFT_SCLK 14  
 #define TFT_CS   15
-#define TFT_DC    2
-#define TFT_RST   4
+#define TFT_DC   2
+#define TFT_RST  -1        // Reset handled by board
+#define TFT_BL   21        // Backlight control
+
+// Font and feature selection
 #define LOAD_GLCD
 #define LOAD_FONT2
 #define LOAD_FONT4
@@ -156,8 +174,9 @@ CONFIG = {
 #define LOAD_FONT8
 #define LOAD_GFXFF
 #define SMOOTH_FONT
-#define SPI_FREQUENCY  27000000
-#define SPI_READ_FREQUENCY  20000000
+
+// SPI frequency
+#define SPI_FREQUENCY  40000000
 ```
 
 ## Running the System

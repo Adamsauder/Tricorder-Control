@@ -34,16 +34,18 @@ The Tricorder Control System is a centralized management platform for ESP32-base
 
 #### 1. ESP32 Tricorder Props (Hardware)
 **Specifications:**
-- **MCU**: ESP32-WROOM-32 or ESP32-S3
-- **Display**: 3.5" TFT LCD (320x240) with SPI interface
-- **Storage**: MicroSD card (16-128GB, FAT32)
+- **MCU**: ESP32-WROOM-32 (ESP32-2432S032C-I development board)
+- **Display**: 3.2" IPS TFT LCD (240x320) with capacitive touch
+- **Display Driver**: ST7789
+- **Storage**: MicroSD card (up to 32GB, FAT32)
 - **LEDs**: 12x WS2812B NeoPixels (addressable RGB)
-- **Power**: 5V USB-C or battery pack
+- **Power**: 5V USB-C input
 - **WiFi**: 802.11 b/g/n (2.4GHz)
 - **Memory**: 4MB Flash, 520KB SRAM
+- **Board Size**: 93.7 x 55.0mm
 
 **Firmware Features:**
-- Auto-connect to designated WiFi network
+- Auto-connect to "Rigging Electrics" WiFi network
 - mDNS service discovery for central server
 - Video file playback from SD card (MP4/AVI)
 - NeoPixel LED control with smooth transitions

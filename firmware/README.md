@@ -15,44 +15,46 @@ ESP32-based firmware for film set prop controllers with embedded screens and Neo
 
 ## Hardware Requirements
 
-### Minimum Configuration
+### Target Development Board: ESP32-2432S032C-I
 - **MCU**: ESP32-WROOM-32 (4MB Flash, 520KB RAM)
-- **Display**: 3.5" TFT LCD (320x240, SPI interface)
-- **Storage**: MicroSD card (16GB+, Class 10)
-- **LEDs**: 12x WS2812B NeoPixels
-- **Power**: 5V USB-C or battery pack (2A+)
+- **Display**: 3.2" IPS TFT LCD (240x320) with capacitive touch
+- **Display Driver**: ST7789
+- **Storage**: MicroSD card slot (up to 32GB, Class 10 recommended)
+- **LEDs**: Connection for 12x WS2812B NeoPixel strip
+- **Power**: 5V USB-C input
+- **Board Size**: 93.7 x 55.0mm
 
-### Recommended Configuration
-- **MCU**: ESP32-S3 (8MB Flash, 512KB SRAM, faster CPU)
-- **Display**: 4.3" TFT LCD with touch (480x272)
-- **Storage**: High-speed microSD (32GB+, UHS-I)
-- **LEDs**: 12x SK6812 (RGBW for better color mixing)
-- **Power**: LiPo battery with charging circuit
+### Additional Components Required
+- **LEDs**: 12x WS2812B NeoPixel strip
+- **Connections**: Dupont wires for LED strip connection
+- **Storage**: MicroSD card (32GB max, Class 10 recommended)
+- **Power**: 5V USB-C power supply (2A recommended)
 
 ## Pin Configuration
 
+### ESP32-2432S032C-I Board Pinout
 ```cpp
-// Display (SPI)
-#define TFT_CS     15
-#define TFT_DC     2
-#define TFT_RST    4
-#define TFT_MOSI   23
-#define TFT_SCLK   18
+// Built-in peripherals (pre-configured)
+// Display: 3.2" IPS TFT LCD with ST7789 driver
+// SD Card: Built-in slot using SPI
+// Touch: Capacitive touch controller (built-in)
 
-// SD Card (SPI)
-#define SD_CS      5
-#define SD_MOSI    23  // Shared with TFT
-#define SD_SCLK    18  // Shared with TFT
-#define SD_MISO    19
+// External connections for NeoPixel LEDs
+#define LED_PIN    2       // NeoPixel data pin (GPIO2)
+#define NUM_LEDS   12      // Number of LEDs in strip
 
-// NeoPixels
-#define LED_PIN    2
-#define NUM_LEDS   12
+// SD Card (built-in slot)
+#define SD_CS      5       // Chip select for SD card
 
-// Optional sensors
-#define BATTERY_PIN  A0
-#define TEMP_PIN     A1
+// Display pins (handled by TFT_eSPI library)
+// These are already configured for the ESP32-2432S032C-I board
+// No manual pin definitions needed for the built-in display
 ```
+
+### External Component Connections
+- **NeoPixel Strip**: Connect data pin to GPIO2
+- **Power**: Use built-in USB-C connector (5V)
+- **SD Card**: Use built-in microSD slot
 
 ## Software Dependencies
 
@@ -90,8 +92,8 @@ lib_deps =
 
 ### Network Settings
 ```cpp
-const char* WIFI_SSID = "TRICORDER_CONTROL";
-const char* WIFI_PASSWORD = "filmset2024";
+const char* WIFI_SSID = "Rigging Electrics";
+const char* WIFI_PASSWORD = "academy123";
 const int UDP_PORT = 8888;
 ```
 

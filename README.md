@@ -6,8 +6,9 @@ A comprehensive control system for ESP32-based film set props with embedded scre
 ## Project Overview
 
 This system controls up to 20 ESP32-based "tricorder" props, each featuring:
-- Embedded screen for video playback from SD card
-- 12 controllable NeoPixel LEDs
+- ESP32-2432S032C-I development board with built-in 3.2" IPS display
+- 240x320 capacitive touch screen for video playback from SD card
+- 12 controllable NeoPixel LEDs (external strip)
 - WiFi connectivity to central server
 - Low-latency command response for film set cuing
 

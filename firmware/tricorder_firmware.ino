@@ -2,6 +2,13 @@
  * Tricorder Control Firmware
  * ESP32-based prop controller with video playback and NeoPixel control
  * 
+ * Hardware: ESP32-2432S032C-I Development Board
+ * - 3.2" IPS TFT LCD (240x320) with capacitive touch
+ * - ST7789 display driver
+ * - ESP32-WROOM-32 module
+ * - Built-in SD card slot
+ * - USB-C power input
+ * 
  * Features:
  * - WiFi connectivity with auto-pairing
  * - Video playback from SD card
@@ -10,13 +17,6 @@
  * - SACN (E1.31) lighting protocol
  * - mDNS service discovery
  * - OTA firmware updates
- * 
- * Hardware Requirements:
- * - ESP32-WROOM-32 or ESP32-S3
- * - 3.5" TFT LCD (320x240)
- * - MicroSD card module
- * - 12x WS2812B NeoPixels
- * - 5V power supply
  */
 
 #include <WiFi.h>
@@ -30,17 +30,15 @@
 #include <AsyncWebServer.h>
 #include <ESPAsyncWebServer.h>
 
-// Pin definitions
-#define LED_PIN 2
-#define NUM_LEDS 12
-#define SD_CS 5
-#define TFT_CS 15
-#define TFT_DC 2
-#define TFT_RST 4
+// Pin definitions for ESP32-2432S032C-I
+#define LED_PIN 2          // NeoPixel data pin (external connection)
+#define NUM_LEDS 12        // Number of NeoPixels in strip
+#define SD_CS 5            // SD card chip select (built-in)
+// TFT pins are pre-configured in the board - using TFT_eSPI library defaults
 
 // Network configuration
-const char* WIFI_SSID = "TRICORDER_CONTROL";
-const char* WIFI_PASSWORD = "filmset2024";
+const char* WIFI_SSID = "Rigging Electrics";
+const char* WIFI_PASSWORD = "academy123";
 const int UDP_PORT = 8888;
 const int WEB_PORT = 80;
 
@@ -127,7 +125,7 @@ void initializeLEDs() {
 
 void initializeDisplay() {
   tft.init();
-  tft.setRotation(1);
+  tft.setRotation(3); // Landscape mode for 320x240
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE);
   tft.setTextSize(2);

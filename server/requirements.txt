@@ -1,0 +1,18 @@
+# Server Requirements
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+python-multipart==0.0.6
+aiofiles==23.2.1
+redis==5.0.1
+websockets==12.0
+jinja2==3.1.2
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Note: sqlite3 is built into Python, no need to install separately
+
+# Optional dependencies for enhanced features
+zeroconf==0.131.0  # mDNS service discovery
+sacn==1.9.0        # SACN (E1.31) lighting protocol
+psutil==5.9.6      # System monitoring

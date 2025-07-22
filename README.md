@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Tricorder Control System
 
 A comprehensive control system for ESP32-based film set props with embedded screens, NeoPixel LEDs, and centralized WiFi management.
@@ -136,3 +137,6 @@ Your development environment is **FULLY READY**! 🎉
 ## License
 
 MIT License - See LICENSE file for details
+=======
+# Tricorder-Control
+>>>>>>> b87436e41037ea0ad757483d10f1537b58743cc1

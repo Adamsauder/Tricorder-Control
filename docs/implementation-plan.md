@@ -1,14 +1,13 @@
 # Tricorder Control System - Implementation Plan
 
-## Project Timeline Overview
+## Project Overview
 
-**Total Estimated Duration**: 12-16 weeks
 **Team Size**: 1-2 developers
 **Phases**: 4 main development phases
 
-## Phase 1: Foundation and Core Infrastructure (Weeks 1-4)
+## Phase 1: Foundation and Core Infrastructure
 
-### Week 1: Project Setup and Prototyping
+### Project Setup and Prototyping
 - [x] ~~Project structure and documentation~~
 - [ ] **ESP32 Hardware Validation**
   - Assemble prototype tricorder with ESP32, screen, and NeoPixels
@@ -21,7 +20,7 @@
   - Configure VS Code with extensions
   - Setup version control and project structure
 
-### Week 2: Basic ESP32 Firmware
+### Basic ESP32 Firmware
 - [ ] **Core ESP32 Framework**
   - WiFi connection and management
   - Basic UDP command listener
@@ -34,7 +33,7 @@
   - NeoPixel strip configuration
   - Power management basics
 
-### Week 3: Central Server Foundation
+### Central Server Foundation
 - [ ] **Python Backend Setup**
   - FastAPI application structure
   - Device discovery service (mDNS)
@@ -46,7 +45,7 @@
   - Health check endpoints
   - Error handling and logging
 
-### Week 4: Basic Web Interface
+### Basic Web Interface
 - [ ] **Frontend Setup**
   - React application with TypeScript
   - Basic component structure
@@ -63,9 +62,9 @@
 - Core command system (play/pause/color)
 - Documentation of architecture decisions
 
-## Phase 2: Advanced Device Features (Weeks 5-8)
+## Phase 2: Advanced Device Features
 
-### Week 5: Enhanced ESP32 Firmware
+### Enhanced ESP32 Firmware
 - [ ] **Advanced Video Features**
   - Multiple video file support
   - Playlist management
@@ -79,7 +78,7 @@
   - Brightness adjustment
   - Power-efficient dimming
 
-### Week 6: File Management System
+### File Management System
 - [ ] **SD Card Management**
   - File upload/download via WiFi
   - Directory structure management
@@ -92,7 +91,7 @@
   - Video transcoding pipeline
   - Storage quota management
 
-### Week 7: SACN Integration
+### SACN Integration
 - [ ] **ESP32 SACN Receiver**
   - E1.31 protocol implementation
   - DMX universe mapping
@@ -105,7 +104,7 @@
   - Universe configuration interface
   - Conflict resolution
 
-### Week 8: Performance Optimization
+### Performance Optimization
 - [ ] **Latency Optimization**
   - Command batching and prioritization
   - UDP multicast for broadcasts
@@ -123,9 +122,9 @@
 - SACN lighting integration
 - Performance benchmarks meeting targets
 
-## Phase 3: Production Web Interface (Weeks 9-12)
+## Phase 3: Production Web Interface
 
-### Week 9: Advanced Web UI
+### Advanced Web UI
 - [ ] **Device Management Interface**
   - Detailed device status pages
   - Configuration editors
@@ -137,7 +136,7 @@
   - Batch operations interface
   - Storage management tools
 
-### Week 10: LED Configuration System
+### LED Configuration System
 - [ ] **LED Control Interface**
   - Visual LED strip configuration
   - Color picker with presets
@@ -150,7 +149,7 @@
   - Automated sequences
   - Timeline synchronization
 
-### Week 11: Control Panel and Automation
+### Control Panel and Automation
 - [ ] **Production Control Interface**
   - Master control panel
   - Emergency stop functionality
@@ -162,7 +161,7 @@
   - External system integration
   - Command scripting interface
 
-### Week 12: Polish and User Experience
+### Polish and User Experience
 - [ ] **UI/UX Refinements**
   - Responsive design for tablets
   - Keyboard shortcuts
@@ -180,9 +179,9 @@
 - User training materials
 - System administration guides
 
-## Phase 4: Production Deployment and Testing (Weeks 13-16)
+## Phase 4: Production Deployment and Testing
 
-### Week 13: System Integration Testing
+### System Integration Testing
 - [ ] **Full Scale Testing**
   - 20-device deployment simulation
   - Network load testing
@@ -194,7 +193,7 @@
   - Power cycle testing
   - Network interruption handling
 
-### Week 14: Production Hardening
+### Production Hardening
 - [ ] **Security Implementation**
   - Authentication and authorization
   - HTTPS/WSS encryption
@@ -206,7 +205,7 @@
   - Usage analytics
   - Audit logging
 
-### Week 15: Deployment Infrastructure
+### Deployment Infrastructure
 - [ ] **Production Deployment**
   - Server deployment scripts
   - Database migration tools
@@ -218,7 +217,7 @@
   - Troubleshooting flowcharts
   - Maintenance schedules
 
-### Week 16: Training and Handoff
+### Training and Handoff
 - [ ] **User Training**
   - Operator training sessions
   - Video tutorials creation
@@ -238,28 +237,28 @@
 
 ## Technical Milestones and Checkpoints
 
-### Milestone 1 (End of Week 4): MVP Demo
+### Milestone 1: MVP Demo
 **Criteria:**
 - 3 ESP32 devices responding to commands
 - Web interface controlling basic functions
 - Sub-100ms command latency
 - Basic video playback working
 
-### Milestone 2 (End of Week 8): Feature Complete
+### Milestone 2: Feature Complete
 **Criteria:**
 - All core features implemented
 - SACN integration functional
 - File management working
 - Performance targets met (< 50ms latency)
 
-### Milestone 3 (End of Week 12): Production Ready
+### Milestone 3: Production Ready
 **Criteria:**
 - Complete web interface
 - Full API documentation
 - All user features functional
 - Security measures implemented
 
-### Milestone 4 (End of Week 16): Deployment Ready
+### Milestone 4: Deployment Ready
 **Criteria:**
 - 20-device testing complete
 - All documentation finished

@@ -10,6 +10,10 @@ jinja2==3.1.2
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 
+# Simple server requirements
+flask==2.3.3
+flask-socketio==5.3.6
+
 # Note: sqlite3 is built into Python, no need to install separately
 
 # Optional dependencies for enhanced features

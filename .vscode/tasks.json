@@ -4,10 +4,13 @@
     {
       "label": "Install Python Dependencies",
       "type": "shell",
-      "command": "powershell",
+      "command": "C:/Tricorder Control/Tricorder-Control/.venv/Scripts/python.exe",
       "args": [
-        "-Command",
-        "$env:PATH = [System.Environment]::GetEnvironmentVariable('PATH','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH','User'); pip install -r server/requirements.txt"
+        "-m",
+        "pip",
+        "install",
+        "-r",
+        "server/requirements.txt"
       ],
       "group": "build",
       "presentation": {
@@ -21,10 +24,9 @@
     {
       "label": "Start Python Server",
       "type": "shell",
-      "command": "powershell",
+      "command": "C:/Tricorder Control/Tricorder-Control/.venv/Scripts/python.exe",
       "args": [
-        "-Command",
-        "$env:PATH = [System.Environment]::GetEnvironmentVariable('PATH','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH','User'); python server/app.py"
+        "server/simple_server.py"
       ],
       "group": "build",
       "isBackground": true,
@@ -117,6 +119,22 @@
         "focus": false,
         "panel": "shared"
       }
+    },
+    {
+      "label": "Quick Test Tricorder",
+      "type": "shell",
+      "command": "C:/Tricorder Control/Tricorder-Control/.venv/Scripts/python.exe",
+      "args": [
+        "server/quick_test.py"
+      ],
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": []
     }
   ]
 }

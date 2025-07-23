@@ -114,7 +114,7 @@ void setup() {
   
   // Initialize display
   tft.init();
-  tft.setRotation(1);
+  tft.setRotation(0);  // 90° counter-clockwise from original rotation(1)
   
   // Initialize backlight
   pinMode(TFT_BL, OUTPUT);

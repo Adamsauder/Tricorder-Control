@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tricorder Debug</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #222; color: #fff; }
+        .log { background: #333; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        button { background: #4CAF50; color: white; border: none; padding: 10px; margin: 5px; border-radius: 5px; cursor: pointer; }
+        input { padding: 8px; margin: 5px; border-radius: 5px; border: none; }
+        select { padding: 8px; margin: 5px; border-radius: 5px; border: none; }
+    </style>
+</head>
+<body>
+    <h1>🛸 Tricorder Debug Interface</h1>
+    
+    <div>
+        <h3>WebSocket Status</h3>
+        <div id="socket-status">Connecting...</div>
+    </div>
+    
+    <div>
+        <h3>Device Management</h3>
+        <input type="text" id="device-ip" value="192.168.1.48" placeholder="Device IP">
+        <button onclick="addDevice()">Add Device</button>
+        <button onclick="listDevices()">List Devices</button>
+    </div>
+    
+    <div>
+        <h3>Device Commands</h3>
+        <input type="text" id="device-id" value="TRICORDER_001" placeholder="Device ID">
+        <button onclick="sendStatus()">Status</button>
+        <button onclick="sendListVideos()">List Videos</button>
+        <select id="video-dropdown">
+            <option value="">Select animation...</option>
+        </select>
+        <button onclick="playSelectedVideo()">Play Selected</button>
+    </div>
+    
+    <div>
+        <h3>Event Log</h3>
+        <div id="event-log"></div>
+    </div>
+
+    <script>
+        const socket = io();
+        const statusDiv = document.getElementById('socket-status');
+        const logDiv = document.getElementById('event-log');
+        
+        function addLog(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log';
+            entry.innerHTML = `[${timestamp}] ${message}`;
+            logDiv.insertBefore(entry, logDiv.firstChild);
+            console.log(`[${timestamp}] ${message}`);
+        }
+        
+        // Socket event handlers
+        socket.on('connect', function() {
+            statusDiv.textContent = '✅ Connected';
+            statusDiv.style.color = '#4CAF50';
+            addLog('🔌 WebSocket connected to server');
+        });
+        
+        socket.on('disconnect', function() {
+            statusDiv.textContent = '❌ Disconnected';
+            statusDiv.style.color = '#f44336';
+            addLog('🔌 WebSocket disconnected from server');
+        });
+        
+        socket.on('devices', function(deviceList) {
+            addLog(`📱 Devices list received: ${JSON.stringify(deviceList, null, 2)}`);
+        });
+        
+        socket.on('device_update', function(device) {
+            addLog(`📱 Device update: ${JSON.stringify(device, null, 2)}`);
+        });
+        
+        socket.on('device_response', function(response) {
+            addLog(`📡 Device response: ${JSON.stringify(response, null, 2)}`);
+            
+            // Check if this is a list_videos response
+            if (response.response && response.response.result && 
+                response.response.result.includes('animations:')) {
+                
+                const result = response.response.result;
+                addLog(`🎬 Parsing video list: ${result}`);
+                
+                // Parse the animation list
+                const animationsPart = result.split('animations:')[1];
+                if (animationsPart) {
+                    const animations = animationsPart.trim().split(',').map(name => name.trim());
+                    addLog(`🎬 Found animations: ${animations.join(', ')}`);
+                    
+                    // Populate dropdown
+                    const dropdown = document.getElementById('video-dropdown');
+                    dropdown.innerHTML = '<option value="">Select animation...</option>';
+                    animations.forEach(animation => {
+                        const option = document.createElement('option');
+                        option.value = animation;
+                        option.textContent = animation;
+                        dropdown.appendChild(option);
+                    });
+                    
+                    addLog(`✅ Dropdown populated with ${animations.length} options`);
+                }
+            }
+        });
+        
+        socket.on('command_sent', function(data) {
+            addLog(`📤 Command sent: ${JSON.stringify(data)}`);
+        });
+        
+        socket.on('error', function(data) {
+            addLog(`❌ Error: ${JSON.stringify(data)}`);
+        });
+        
+        // Functions
+        function addDevice() {
+            const ip = document.getElementById('device-ip').value;
+            addLog(`🔍 Adding device at IP: ${ip}`);
+            
+            fetch('/api/add_device', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip_address: ip })
+            })
+            .then(response => response.json())
+            .then(data => {
+                addLog(`📡 Add device response: ${JSON.stringify(data)}`);
+            })
+            .catch(error => {
+                addLog(`❌ Add device error: ${error}`);
+            });
+        }
+        
+        function listDevices() {
+            addLog(`📋 Requesting device list...`);
+            
+            fetch('/api/devices')
+            .then(response => response.json())
+            .then(data => {
+                addLog(`📋 Device list response: ${JSON.stringify(data, null, 2)}`);
+            })
+            .catch(error => {
+                addLog(`❌ List devices error: ${error}`);
+            });
+        }
+        
+        function sendStatus() {
+            const deviceId = document.getElementById('device-id').value;
+            addLog(`📊 Sending status command to ${deviceId}`);
+            
+            socket.emit('send_command', {
+                device_id: deviceId,
+                action: 'status',
+                parameters: {}
+            });
+        }
+        
+        function sendListVideos() {
+            const deviceId = document.getElementById('device-id').value;
+            addLog(`🎬 Sending list_videos command to ${deviceId}`);
+            
+            socket.emit('send_command', {
+                device_id: deviceId,
+                action: 'list_videos',
+                parameters: {}
+            });
+        }
+        
+        function playSelectedVideo() {
+            const deviceId = document.getElementById('device-id').value;
+            const dropdown = document.getElementById('video-dropdown');
+            const selectedVideo = dropdown.value;
+            
+            if (!selectedVideo) {
+                addLog(`⚠️ No video selected`);
+                return;
+            }
+            
+            addLog(`▶️ Playing video "${selectedVideo}" on ${deviceId}`);
+            
+            socket.emit('send_command', {
+                device_id: deviceId,
+                action: 'play_video',
+                parameters: {
+                    filename: selectedVideo,
+                    loop: false
+                }
+            });
+        }
+        
+        // Auto-connect on load
+        addLog('🚀 Debug interface loaded');
+    </script>
+</body>
+</html>

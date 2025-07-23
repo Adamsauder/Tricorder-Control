@@ -14,6 +14,33 @@ TRICORDER_IP = "192.168.1.100"  # Update with your tricorder's IP
 UDP_PORT = 8888
 TIMEOUT = 5.0
 
+def test_connection():
+    """Test basic network connectivity to the tricorder"""
+    import subprocess
+    import platform
+    
+    print(f"Testing connection to {TRICORDER_IP}...")
+    
+    # Use ping to test basic connectivity
+    param = "-n" if platform.system().lower() == "windows" else "-c"
+    command = ["ping", param, "2", TRICORDER_IP]
+    
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            print("✓ Device is reachable via ping")
+            return True
+        else:
+            print("✗ Device is not responding to ping")
+            print("Check that the device is powered on and connected to the network")
+            return False
+    except subprocess.TimeoutExpired:
+        print("✗ Ping timed out")
+        return False
+    except Exception as e:
+        print(f"✗ Ping test failed: {e}")
+        return False
+
 def send_command(command_data, wait_for_response=True):
     """Send a UDP command to the tricorder and optionally wait for response"""
     
@@ -28,8 +55,8 @@ def send_command(command_data, wait_for_response=True):
         sock.sendto(command_json.encode('utf-8'), (TRICORDER_IP, UDP_PORT))
         
         if wait_for_response:
-            # Wait for response
-            response, addr = sock.recvfrom(1024)
+            # Wait for response - increased buffer size for large video lists
+            response, addr = sock.recvfrom(4096)  # Increased from 1024 to 4096 bytes
             response_data = json.loads(response.decode('utf-8'))
             print(f"Response: {json.dumps(response_data, indent=2)}")
             return response_data
@@ -38,6 +65,18 @@ def send_command(command_data, wait_for_response=True):
         
     except socket.timeout:
         print("Timeout waiting for response")
+        print("Troubleshooting tips:")
+        print("1. Check that the tricorder is powered on and connected to WiFi")
+        print("2. Verify the IP address is correct")
+        print("3. Ensure both devices are on the same network")
+        print("4. Check if UDP port 8888 is blocked by firewall")
+        return None
+    except socket.gaierror as e:
+        print(f"DNS/Address error: {e}")
+        print("Check that the IP address format is correct (e.g., 192.168.1.48)")
+        return None
+    except ConnectionRefusedError:
+        print("Connection refused - device may not be listening on UDP port 8888")
         return None
     except Exception as e:
         print(f"Error: {e}")
@@ -51,6 +90,11 @@ def test_video_commands():
     print("=== Tricorder Video Test ===")
     print(f"Target IP: {TRICORDER_IP}:{UDP_PORT}")
     print()
+    
+    # Test basic connectivity first
+    if not test_connection():
+        print("Cannot reach device. Please check network connection.")
+        return
     
     # Test 1: Get status
     print("1. Getting device status...")
@@ -156,10 +200,16 @@ def interactive_mode():
     print("Available commands:")
     print("  status - Get device status")
     print("  list - List available videos")
-    print("  play <filename> - Play video")
+    print("  play <video_name> - Play video (use base name without _001 etc.)")
     print("  stop - Stop current video")
     print("  led <r> <g> <b> - Set LED color")
     print("  quit - Exit")
+    print()
+    print("Example video names:")
+    print("  play static_test")
+    print("  play color_red") 
+    print("  play startup")
+    print("  play animated_test")
     print()
     
     command_id = 1
@@ -190,13 +240,13 @@ def interactive_mode():
                 })
                 
             elif cmd == "play" and len(parts) > 1:
-                filename = parts[1]
+                video_name = parts[1]
                 loop = input("Loop video? (Y/n): ").strip().lower() != 'n'
                 send_command({
                     "action": "play_video",
                     "commandId": f"interactive_{command_id}",
                     "parameters": {
-                        "filename": filename,
+                        "filename": video_name,  # Use base name, firmware will find the file
                         "loop": loop
                     }
                 })
@@ -220,6 +270,7 @@ def interactive_mode():
                     
             else:
                 print("Unknown command. Type 'quit' to exit.")
+                print("Available: status, list, play <name>, stop, led <r> <g> <b>, quit")
             
             command_id += 1
             

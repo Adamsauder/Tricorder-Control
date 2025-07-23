@@ -30,37 +30,53 @@ ffmpeg -i input.mp4 -vf "scale=320:240" -r 15 -q:v 2 frame_%04d.jpg
 ffmpeg -i input.mp4 -vf "scale=320:240" -r 15 -q:v 8 frame_%04d.jpg
 ```
 
-### 4. Organize Files
-Place JPEG files in the `/videos/` directory. For best performance:
-- Keep file sizes under 50KB per frame
-- Use 320x240 resolution or smaller
-- Limit to 15 FPS or lower
-- Use shorter sequences (under 30 seconds) for reliable playback
+### 4. Organize Files (Simplified Approach)
+Place JPEG files in the `/videos/` directory using simple names:
+- Use single representative images instead of frame sequences
+- Name files with simple, descriptive names
+- No frame numbers or complex suffixes needed
 
 Example structure:
 ```
 /videos/
-├── startup_animation.jpg
-├── tricorder_scan.jpg
-├── alert_sequence.jpg
-└── shutdown.jpg
+├── static_test.jpg      # Test pattern
+├── color_red.jpg        # Solid red
+├── color_blue.jpg       # Solid blue
+├── startup.jpg          # Startup animation frame
+└── animated_test.jpg    # Animation frame
+```
+
+### 5. Simple Commands
+With the simplified approach, use base names without extensions:
+```bash
+# Play videos using simple names
+play static_test     # Displays static_test.jpg
+play color_red       # Displays color_red.jpg
+play startup         # Displays startup.jpg or startup_frame_001.jpg
 ```
 
 ## Usage
 
 ### UDP Commands
 
-#### Play Video
+#### Play Video (Simplified)
 ```json
 {
   "action": "play_video",
   "commandId": "cmd123",
   "parameters": {
-    "filename": "startup_animation.jpg",
+    "filename": "color_red",
     "loop": true
   }
 }
 ```
+
+**Note:** Use simple base names without file extensions or frame numbers. The firmware automatically finds the correct file.
+
+Examples:
+- `"filename": "static_test"` → finds `static_test.jpg`
+- `"filename": "color_red"` → finds `color_red.jpg`  
+- `"filename": "startup"` → finds `startup_frame_001.jpg` or `startup.jpg`
 
 #### Stop Video
 ```json
@@ -77,6 +93,8 @@ Example structure:
   "commandId": "cmd125"
 }
 ```
+
+**Note:** This returns simplified base names, not individual frame files.
 
 #### Get Status (includes video info)
 ```json

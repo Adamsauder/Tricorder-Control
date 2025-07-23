@@ -64,6 +64,9 @@ CRGB currentColor = CRGB::Black;
 uint8_t ledBrightness = 128;
 unsigned long lastFrameTime = 0;
 int currentFrame = 0;
+int totalFrames = 1;
+String frameFiles[30]; // Store up to 30 frame files
+bool isAnimatedSequence = false;
 
 // Video frame callback
 int JPEGDraw(JPEGDRAW *pDraw) {
@@ -84,6 +87,7 @@ bool playVideo(String filename, bool loop = false);
 void stopVideo();
 void updateVideoPlayback();
 bool listVideos();
+String getVideoList();
 void showVideoFrame();
 
 void setup() {
@@ -284,8 +288,9 @@ void handleUDPCommands() {
       }
       else if (action == "list_videos") {
         if (sdCardInitialized) {
-          listVideos();
-          sendResponse(commandId, "Video list printed to serial");
+          listVideos(); // Still print to serial for debugging
+          String videoList = getVideoList();
+          sendResponse(commandId, videoList);
         } else {
           sendResponse(commandId, "SD card not available");
         }
@@ -374,23 +379,133 @@ bool playVideo(String filename, bool loop) {
     stopVideo();
   }
   
+  // Reset animation state
+  totalFrames = 0;
+  isAnimatedSequence = false;
+  
+  // Check if this is a folder-based animation
+  String folderPath = videoDirectory + "/" + filename;
+  
+  if (SD.exists(folderPath)) {
+    // Check if it's a directory
+    File testDir = SD.open(folderPath);
+    if (testDir && testDir.isDirectory()) {
+      testDir.close();
+      
+      // Load all JPEG files from the folder
+      File animDir = SD.open(folderPath);
+      if (!animDir) {
+        Serial.printf("Failed to open animation folder: %s\n", folderPath.c_str());
+        return false;
+      }
+      
+      // Collect all frame files
+      File file = animDir.openNextFile();
+      while (file && totalFrames < 30) {
+        if (!file.isDirectory()) {
+          String frameFile = file.name();
+          if (frameFile.endsWith(".jpg") || frameFile.endsWith(".jpeg") || 
+              frameFile.endsWith(".JPG") || frameFile.endsWith(".JPEG")) {
+            frameFiles[totalFrames] = folderPath + "/" + frameFile;
+            totalFrames++;
+            Serial.printf("Added frame %d: %s\n", totalFrames, frameFile.c_str());
+          }
+        }
+        file = animDir.openNextFile();
+      }
+      animDir.close();
+      
+      if (totalFrames > 0) {
+        isAnimatedSequence = true;
+        Serial.printf("Loaded %d frames for animation: %s\n", totalFrames, filename.c_str());
+        
+        // Set video state for animation
+        videoPlaying = true;
+        videoLooping = loop;
+        currentVideo = filename;
+        currentFrame = 0;
+        lastFrameTime = millis();
+        
+        // Clear screen
+        tft.fillScreen(TFT_BLACK);
+        
+        return true;
+      } else {
+        Serial.printf("No JPEG files found in folder: %s\n", folderPath.c_str());
+        return false;
+      }
+    }
+  }
+  
+  // Fall back to single file mode
+  String actualFile = "";
+  
+  // If filename already has extension, use it directly
+  if (filename.endsWith(".jpg") || filename.endsWith(".jpeg") || 
+      filename.endsWith(".JPG") || filename.endsWith(".JPEG")) {
+    actualFile = filename;
+  } else {
+    // Search for files that match the base name
+    File dir = SD.open(videoDirectory);
+    if (!dir) {
+      Serial.println("Failed to open videos directory");
+      return false;
+    }
+    
+    File file = dir.openNextFile();
+    String bestMatch = "";
+    
+    while (file) {
+      if (!file.isDirectory()) {
+        String candidateFile = file.name();
+        
+        // Check if this file matches our search
+        if ((candidateFile.endsWith(".jpg") || candidateFile.endsWith(".jpeg") || 
+             candidateFile.endsWith(".JPG") || candidateFile.endsWith(".JPEG"))) {
+          
+          // Check if filename is contained in the candidate
+          if (candidateFile.indexOf(filename) == 0) {
+            // Prefer exact matches or first frame
+            if (bestMatch == "" || 
+                candidateFile == filename + ".jpg" || 
+                candidateFile == filename + ".jpeg" ||
+                candidateFile.indexOf("_001") > 0 ||
+                candidateFile.indexOf("_frame_001") > 0) {
+              bestMatch = candidateFile;
+            }
+          }
+        }
+      }
+      file = dir.openNextFile();
+    }
+    
+    dir.close();
+    
+    if (bestMatch != "") {
+      actualFile = bestMatch;
+    } else {
+      // Try adding .jpg extension
+      actualFile = filename + ".jpg";
+    }
+  }
+  
   // Construct full path
-  String fullPath = videoDirectory + "/" + filename;
+  String fullPath = videoDirectory + "/" + actualFile;
   
   // Check if file exists
   if (!SD.exists(fullPath)) {
     Serial.printf("Video file not found: %s\n", fullPath.c_str());
+    Serial.printf("Tried: %s\n", actualFile.c_str());
     return false;
   }
   
-  // Open the video file
-  videoFile = SD.open(fullPath, FILE_READ);
-  if (!videoFile) {
-    Serial.printf("Failed to open video file: %s\n", fullPath.c_str());
-    return false;
-  }
+  // Single file mode - just store the path in frameFiles[0]
+  frameFiles[0] = fullPath;
+  totalFrames = 1;
+  isAnimatedSequence = false;
   
-  Serial.printf("Starting video playback: %s (Loop: %s)\n", filename.c_str(), loop ? "Yes" : "No");
+  Serial.printf("Starting single image playback: %s -> %s (Loop: %s)\n", 
+                filename.c_str(), actualFile.c_str(), loop ? "Yes" : "No");
   
   // Set video state
   videoPlaying = true;
@@ -410,7 +525,15 @@ void stopVideo() {
     videoPlaying = false;
     videoLooping = false;
     currentFrame = 0;
+    totalFrames = 0;
+    isAnimatedSequence = false;
     
+    // Clear frame files array
+    for (int i = 0; i < 30; i++) {
+      frameFiles[i] = "";
+    }
+    
+    // Close video file if it was opened (legacy single file mode)
     if (videoFile) {
       videoFile.close();
     }
@@ -428,37 +551,72 @@ void stopVideo() {
 }
 
 void updateVideoPlayback() {
-  if (!videoPlaying || !videoFile) {
+  if (!videoPlaying || totalFrames == 0) {
     return;
   }
   
   unsigned long currentTime = millis();
   
-  // Check if it's time for the next frame
-  if (currentTime - lastFrameTime >= FRAME_DELAY_MS) {
-    showVideoFrame();
-    lastFrameTime = currentTime;
-    currentFrame++;
-  }
-}
-
-void showVideoFrame() {
-  if (!videoFile || !videoFile.available()) {
-    // End of file reached
-    if (videoLooping) {
-      // Restart video
-      videoFile.seek(0);
-      currentFrame = 0;
-      Serial.println("Looping video...");
-    } else {
-      // Stop video
-      stopVideo();
+  // For single images, show once and handle looping
+  if (!isAnimatedSequence) {
+    if (currentFrame == 0) {
+      showVideoFrame();
+      currentFrame = 1; // Mark as shown
+    }
+    
+    // For single images, only stop if not looping
+    if (!videoLooping && currentFrame > 0) {
+      // Single image shown, not looping - keep displaying
+      return;
     }
     return;
   }
   
-  // Read frame data
-  size_t bytesRead = videoFile.read(videoBuffer, VIDEO_BUFFER_SIZE);
+  // For animated sequences, check if it's time for the next frame
+  if (currentTime - lastFrameTime >= FRAME_DELAY_MS) {
+    showVideoFrame();
+    lastFrameTime = currentTime;
+    currentFrame++;
+    
+    // Check if we've reached the end of the animation
+    if (currentFrame >= totalFrames) {
+      if (videoLooping) {
+        // Restart animation
+        currentFrame = 0;
+        Serial.println("Looping animation...");
+      } else {
+        // Stop animation
+        stopVideo();
+      }
+    }
+  }
+}
+
+void showVideoFrame() {
+  if (!videoPlaying || totalFrames == 0) {
+    return;
+  }
+  
+  // Get the current frame file path
+  String currentFramePath = frameFiles[currentFrame];
+  
+  // Open and display the current frame
+  File frameFile = SD.open(currentFramePath, FILE_READ);
+  if (!frameFile) {
+    Serial.printf("Failed to open frame file: %s\n", currentFramePath.c_str());
+    return;
+  }
+  
+  // Read the entire JPEG file into buffer
+  size_t fileSize = frameFile.size();
+  if (fileSize > VIDEO_BUFFER_SIZE) {
+    Serial.printf("Frame file too large: %d bytes (max %d)\n", fileSize, VIDEO_BUFFER_SIZE);
+    frameFile.close();
+    return;
+  }
+  
+  size_t bytesRead = frameFile.read(videoBuffer, fileSize);
+  frameFile.close();
   
   if (bytesRead > 0) {
     // Try to decode as JPEG
@@ -468,7 +626,7 @@ void showVideoFrame() {
       
       // Decode and display
       if (jpeg.decode(0, 0, 0)) {
-        // Frame displayed successfully
+        Serial.printf("Displayed frame %d/%d: %s\n", currentFrame + 1, totalFrames, currentFramePath.c_str());
       } else {
         Serial.println("JPEG decode failed");
       }
@@ -523,4 +681,139 @@ bool listVideos() {
   }
   
   return true;
+}
+
+String getVideoList() {
+  String videoList = "";
+  
+  if (!sdCardInitialized) {
+    return "SD card not initialized";
+  }
+  
+  File dir = SD.open(videoDirectory);
+  if (!dir) {
+    return "Failed to open videos directory";
+  }
+  
+  File item = dir.openNextFile();
+  int folderCount = 0;
+  int fileCount = 0;
+  String folders[20]; // Store up to 20 folder names
+  String uniqueFiles[20]; // Store up to 20 unique file names
+  int uniqueFileCount = 0;
+  
+  while (item) {
+    String itemName = item.name();
+    
+    if (item.isDirectory()) {
+      // This is a folder - check if it contains JPEG files
+      String folderPath = videoDirectory + "/" + itemName;
+      File subDir = SD.open(folderPath);
+      if (subDir) {
+        File subFile = subDir.openNextFile();
+        bool hasJpegs = false;
+        while (subFile && !hasJpegs) {
+          if (!subFile.isDirectory()) {
+            String subFileName = subFile.name();
+            if (subFileName.endsWith(".jpg") || subFileName.endsWith(".jpeg") || 
+                subFileName.endsWith(".JPG") || subFileName.endsWith(".JPEG")) {
+              hasJpegs = true;
+            }
+          }
+          subFile = subDir.openNextFile();
+        }
+        subDir.close();
+        
+        if (hasJpegs && folderCount < 20) {
+          folders[folderCount] = itemName;
+          folderCount++;
+        }
+      }
+    } else {
+      // This is a file - check if it's a JPEG
+      if (itemName.endsWith(".jpg") || itemName.endsWith(".jpeg") || 
+          itemName.endsWith(".JPG") || itemName.endsWith(".JPEG")) {
+        
+        // Extract base name (remove frame numbers and extensions)
+        String baseName = itemName;
+        
+        // Remove common frame suffixes like _001, _frame_001, etc.
+        int framePos = baseName.indexOf("_frame_");
+        if (framePos == -1) framePos = baseName.lastIndexOf("_");
+        
+        if (framePos > 0) {
+          String suffix = baseName.substring(framePos + 1);
+          // Check if suffix is numeric (frame number)
+          bool isNumeric = true;
+          for (int i = 0; i < suffix.length(); i++) {
+            char c = suffix.charAt(i);
+            if (c < '0' || c > '9') {
+              if (c != '.' && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z')) {
+                isNumeric = false;
+                break;
+              }
+            }
+          }
+          if (isNumeric || suffix.startsWith("00") || suffix.startsWith("frame")) {
+            baseName = baseName.substring(0, framePos);
+          }
+        }
+        
+        // Remove file extension
+        int dotPos = baseName.lastIndexOf(".");
+        if (dotPos > 0) {
+          baseName = baseName.substring(0, dotPos);
+        }
+        
+        // Check if this base name is already in our list
+        bool found = false;
+        for (int i = 0; i < uniqueFileCount; i++) {
+          if (uniqueFiles[i] == baseName) {
+            found = true;
+            break;
+          }
+        }
+        
+        // Add to unique list if not found
+        if (!found && uniqueFileCount < 20) {
+          uniqueFiles[uniqueFileCount] = baseName;
+          uniqueFileCount++;
+        }
+        
+        fileCount++;
+      }
+    }
+    item = dir.openNextFile();
+  }
+  
+  dir.close();
+  
+  if (folderCount == 0 && uniqueFileCount == 0) {
+    videoList = "No videos found. Create folders with JPEG sequences or place JPEG files in /videos";
+  } else {
+    videoList = "";
+    
+    if (folderCount > 0) {
+      videoList += String(folderCount) + " animations: ";
+      for (int i = 0; i < folderCount; i++) {
+        if (i > 0) videoList += ", ";
+        videoList += folders[i];
+      }
+    }
+    
+    if (uniqueFileCount > 0) {
+      if (folderCount > 0) videoList += " | ";
+      videoList += String(uniqueFileCount) + " images: ";
+      for (int i = 0; i < uniqueFileCount; i++) {
+        if (i > 0) videoList += ", ";
+        videoList += uniqueFiles[i];
+      }
+    }
+    
+    if (fileCount > 0) {
+      videoList += " (" + String(fileCount) + " total files)";
+    }
+  }
+  
+  return videoList;
 }

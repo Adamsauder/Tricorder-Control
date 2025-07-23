@@ -121,23 +121,70 @@ Go to Tools → Manage Libraries and install:
 2. Set baud rate to 115200
 3. You should see:
    ```
-   Tricorder Control Firmware v1.0.0
-   LEDs initialized
-   Display initialized
-   SD card initialized
-   WiFi connected
+   Starting Tricorder Control System...
+   SD card initialized successfully!
+   SD Card: OK
+   Created /videos directory
+   Found X video files
+   WiFi connected!
    IP address: 192.168.x.x
-   System ready
+   Setup complete!
    ```
+
+## Video Functionality Testing
+
+After successful flashing and video features are enabled:
+
+### 1. SD Card Setup
+1. **Format SD Card**: Use FAT32 format
+2. **Create Directory**: Make a `/videos/` folder on the SD card
+3. **Add Test Files**: Copy test videos (JPEG format) to `/videos/`
+4. **Insert Card**: Insert SD card into the ESP32 board
+
+### 2. Video Test Commands
+Use the test script or send UDP commands:
+```json
+{"action": "list_videos", "commandId": "test1"}
+{"action": "play_video", "commandId": "test2", "parameters": {"filename": "test.jpg", "loop": true}}
+{"action": "stop_video", "commandId": "test3"}
+```
+
+### 3. Expected Video Output
+- **Boot Screen**: Shows SD card status and video count
+- **Video Playback**: Smooth display on TFT screen
+- **Serial Output**: Video status and debugging information
 
 ## First Boot Verification
 
 After successful flashing:
 
-1. **Display Check**: Screen should show "Tricorder Control" and device information
-2. **WiFi Check**: Device should connect to "Rigging Electrics" network
-3. **LED Check**: Green LEDs should flash briefly on startup
-4. **Serial Check**: Open Serial Monitor to see connection status
+1. **Display Check**: Screen should show "Tricorder Booting..." then status information
+2. **SD Card Check**: Should show "SD Card: OK" if card is inserted
+3. **WiFi Check**: Device should connect to "Rigging Electric" network  
+4. **LED Check**: Built-in RGB LED changes colors during boot sequence
+5. **Serial Check**: Open Serial Monitor to see full initialization process
+
+## Video Playback Setup
+
+1. **Prepare Videos**: Use provided scripts to convert videos to JPEG format
+   ```bash
+   python generate_test_patterns.py  # Create test patterns
+   ./prepare_video.sh input.mp4      # Convert existing videos
+   ```
+
+2. **SD Card Structure**:
+   ```
+   SD:/
+   └── videos/
+       ├── test_pattern.jpg
+       ├── startup_animation.jpg
+       └── color_cycle.jpg
+   ```
+
+3. **Test Video Playback**: Use the test script
+   ```bash
+   python test_video.py [TRICORDER_IP]
+   ```
 
 ## Next Steps
 

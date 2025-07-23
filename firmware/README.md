@@ -5,20 +5,19 @@ ESP32-based firmware for film set prop controllers with embedded screens and Neo
 ## Features
 
 - **WiFi Connectivity**: Auto-connect to designated network with reconnection handling
-- **Video Playback**: MP4/AVI playback from SD card with play/pause/next controls
+- **Video Playback**: JPEG sequence playback from SD card with loop controls
 - **NeoPixel Control**: 12-channel RGB LED control with animations and SACN support
-- **Web API**: RESTful endpoints for status and file management
+- **TFT Display**: 3.2" color display with video playback and status information
 - **UDP Commands**: Low-latency command processing (< 50ms)
 - **mDNS Discovery**: Automatic service advertisement for central server discovery
-- **Health Monitoring**: Battery, temperature, and performance monitoring
-- **OTA Updates**: Over-the-air firmware update capability
+- **Health Monitoring**: Memory, WiFi, and performance monitoring
+- **SD Card Support**: Video storage and file management
 
 ## Hardware Requirements
 
 ### Target Development Board: ESP32-2432S032C-I
 - **MCU**: ESP32-WROOM-32 (4MB Flash, 520KB RAM)
-- **Display**: 3.2" IPS TFT LCD (240x320) with capacitive touch
-- **Display Driver**: ST7789
+- **Display**: 3.2" IPS TFT LCD (240x320) with ST7789 driver
 - **Storage**: MicroSD card slot (up to 32GB, Class 10 recommended)
 - **LEDs**: Connection for 12x WS2812B NeoPixel strip
 - **Power**: 5V USB-C input
@@ -43,13 +42,40 @@ ESP32-based firmware for film set prop controllers with embedded screens and Neo
 #define LED_PIN    2       // NeoPixel data pin (GPIO2)
 #define NUM_LEDS   12      // Number of LEDs in strip
 
-// SD Card (built-in slot)
+// SD Card pins (built-in slot)
 #define SD_CS      5       // Chip select for SD card
+#define SD_MOSI    23      // SD card MOSI
+#define SD_MISO    19      // SD card MISO
+#define SD_SCLK    18      // SD card SCLK
 
 // Display pins (handled by TFT_eSPI library)
 // These are already configured for the ESP32-2432S032C-I board
 // No manual pin definitions needed for the built-in display
 ```
+
+## Video Playback Setup
+
+The tricorder supports video playback from SD card using JPEG image sequences. For detailed setup instructions, see:
+
+📹 **[VIDEO_PLAYBACK_GUIDE.md](VIDEO_PLAYBACK_GUIDE.md)** - Complete video setup and usage guide
+
+### Quick Start for Videos
+1. Format SD card as FAT32
+2. Create `/videos/` directory on SD card
+3. Convert videos to JPEG format (320x240 recommended)
+4. Use UDP commands to control playback
+
+### Supported Formats
+- JPEG images (.jpg, .jpeg)
+- Resolution: 320x240 recommended
+- Frame rate: Up to 15 FPS
+- File size: <50KB per frame recommended
+
+### Test Files
+Use the included scripts to prepare video content:
+- `prepare_video.sh` (Linux/Mac)
+- `prepare_video.bat` (Windows)
+- `test_video.py` (Testing script)
 
 ### External Component Connections
 - **NeoPixel Strip**: Connect data pin to GPIO2
@@ -139,12 +165,10 @@ Response: {
 ### UDP Command Format
 ```json
 {
-  "command_id": "uuid-string",
-  "timestamp": 1234567890,
-  "target": "TRICORDER_001",
-  "action": "video_play",
+  "commandId": "uuid-string",
+  "action": "play_video",
   "parameters": {
-    "filename": "scene1.mp4",
+    "filename": "animation.jpg",
     "loop": true
   }
 }
@@ -153,33 +177,27 @@ Response: {
 ### Response Format
 ```json
 {
-  "command_id": "uuid-string",
-  "timestamp": 1234567891,
-  "device_id": "TRICORDER_001",
-  "status": "success",
-  "message": "Video playing: scene1.mp4",
-  "execution_time_ms": 15
+  "commandId": "uuid-string",
+  "result": "Video started: animation.jpg",
+  "timestamp": 1234567890,
+  "deviceId": "TRICORDER_001"
 }
 ```
 
 ### Supported Commands
 
 #### Video Control
-- `video_play`: Start video playback
-- `video_pause`: Pause current video
-- `video_stop`: Stop and reset video
-- `video_next`: Play next video in sequence
+- `play_video`: Start video playback from SD card
+- `stop_video`: Stop current video playback
+- `list_videos`: List available videos on SD card
 
 #### LED Control
-- `led_color`: Set solid color (r, g, b values)
-- `led_brightness`: Set brightness (0.0-1.0)
-- `led_animation`: Start predefined animation
-- `led_off`: Turn off all LEDs
+- `set_led_color`: Set solid color (r, g, b values 0-255)
+- `set_led_brightness`: Set brightness (0-255)
+- `set_builtin_led`: Set built-in RGB LED color
 
 #### System Commands
-- `ping`: Health check (responds with "pong")
-- `restart`: Reboot device
-- `get_status`: Request status update
+- `status`: Get device status and video information
 
 ## SACN Integration
 

@@ -13,6 +13,10 @@
 #include <SPI.h>
 #include <FS.h>
 #include <JPEGDEC.h>
+#include <ArduinoOTA.h>
+#include <Update.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
 
 // Pin definitions for ESP32-2432S032C-I
 #define LED_PIN 2          // NeoPixel data pin (external connection)
@@ -48,6 +52,7 @@ CRGB leds[NUM_LEDS];
 TFT_eSPI tft = TFT_eSPI();
 WiFiUDP udp;
 JPEGDEC jpeg;
+WebServer otaServer(80);  // Web server for OTA updates
 
 // Video playback objects
 File videoFile;
@@ -195,6 +200,12 @@ void setup() {
       Serial.println("mDNS responder started");
       MDNS.addService("tricorder", "udp", UDP_PORT);
     }
+    
+    // Initialize OTA updates
+    setupOTA();
+    
+    // Initialize OTA web server
+    setupOTAWebServer();
   } else {
     Serial.println("WiFi connection failed!");
     tft.fillScreen(TFT_RED);
@@ -213,6 +224,12 @@ void setup() {
 }
 
 void loop() {
+  // Handle OTA updates
+  ArduinoOTA.handle();
+  
+  // Handle OTA web server
+  otaServer.handleClient();
+  
   // Handle UDP commands
   handleUDPCommands();
   
@@ -816,4 +833,191 @@ String getVideoList() {
   }
   
   return videoList;
+}
+
+// OTA Setup Functions
+void setupOTA() {
+  ArduinoOTA.setHostname(deviceId.c_str());
+  ArduinoOTA.setPassword("tricorder123");  // Set OTA password
+  
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_SPIFFS
+      type = "filesystem";
+    }
+    
+    // Stop video playback and clear display
+    videoPlaying = false;
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_YELLOW);
+    tft.setTextSize(2);
+    tft.setCursor(10, 10);
+    tft.println("OTA Update");
+    tft.setCursor(10, 40);
+    tft.println("Starting...");
+    
+    // Set built-in LED to orange during update
+    setBuiltinLED(255, 165, 0);
+    
+    Serial.println("Start updating " + type);
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    tft.setCursor(10, 70);
+    tft.setTextColor(TFT_GREEN);
+    tft.println("Complete!");
+    Serial.println("\nEnd");
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    static unsigned int lastPercent = 0;
+    unsigned int percent = (progress / (total / 100));
+    
+    if (percent != lastPercent && percent % 10 == 0) {
+      tft.fillRect(10, 100, 300, 30, TFT_BLACK);
+      tft.setCursor(10, 100);
+      tft.setTextColor(TFT_CYAN);
+      tft.printf("Progress: %u%%\n", percent);
+      lastPercent = percent;
+    }
+    
+    Serial.printf("Progress: %u%%\r", percent);
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    tft.fillScreen(TFT_RED);
+    tft.setTextColor(TFT_WHITE);
+    tft.setCursor(10, 10);
+    tft.println("OTA Error!");
+    
+    setBuiltinLED(255, 0, 0);  // Red for error
+    
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+      tft.setCursor(10, 40);
+      tft.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+      tft.setCursor(10, 40);
+      tft.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+      tft.setCursor(10, 40);
+      tft.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+      tft.setCursor(10, 40);
+      tft.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+      tft.setCursor(10, 40);
+      tft.println("End Failed");
+    }
+    
+    delay(5000);
+    ESP.restart();
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("OTA Ready");
+}
+
+void setupOTAWebServer() {
+  // Handle firmware upload via web interface
+  otaServer.on("/", HTTP_GET, []() {
+    String html = "<!DOCTYPE html><html><head><title>Tricorder OTA Update</title>";
+    html += "<style>body{font-family:Arial;margin:40px;background:#f0f0f0;}";
+    html += ".container{max-width:600px;margin:0 auto;background:white;padding:30px;border-radius:10px;box-shadow:0 0 10px rgba(0,0,0,0.1);}";
+    html += "h1{color:#333;text-align:center;}";
+    html += ".info{background:#e7f3ff;padding:15px;border-radius:5px;margin:20px 0;}";
+    html += "input[type=file]{width:100%;padding:10px;margin:10px 0;border:2px dashed #ccc;border-radius:5px;}";
+    html += "input[type=submit]{background:#007cba;color:white;padding:15px 30px;border:none;border-radius:5px;font-size:16px;cursor:pointer;width:100%;}";
+    html += "input[type=submit]:hover{background:#005a87;}";
+    html += ".status{margin:20px 0;padding:10px;border-radius:5px;display:none;}";
+    html += ".success{background:#d4edda;color:#155724;border:1px solid #c3e6cb;}";
+    html += ".error{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;}";
+    html += "</style></head><body>";
+    html += "<div class='container'>";
+    html += "<h1>Tricorder Firmware Update</h1>";
+    html += "<div class='info'>";
+    html += "<strong>Device:</strong> " + deviceId + "<br>";
+    html += "<strong>Current Firmware:</strong> " + firmwareVersion + "<br>";
+    html += "<strong>IP Address:</strong> " + WiFi.localIP().toString() + "<br>";
+    html += "<strong>Free Heap:</strong> " + String(ESP.getFreeHeap()) + " bytes";
+    html += "</div>";
+    html += "<form method='POST' action='/update' enctype='multipart/form-data'>";
+    html += "<p>Select firmware file (.bin):</p>";
+    html += "<input type='file' name='firmware' accept='.bin' required>";
+    html += "<br><input type='submit' value='Upload Firmware'>";
+    html += "</form>";
+    html += "<div id='status' class='status'></div>";
+    html += "</div></body></html>";
+    
+    otaServer.send(200, "text/html", html);
+  });
+  
+  // Handle firmware upload
+  otaServer.on("/update", HTTP_POST, []() {
+    otaServer.sendHeader("Connection", "close");
+    otaServer.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = otaServer.upload();
+    
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.printf("Update: %s\n", upload.filename.c_str());
+      
+      // Display update status on screen
+      tft.fillScreen(TFT_BLACK);
+      tft.setTextColor(TFT_YELLOW);
+      tft.setTextSize(2);
+      tft.setCursor(10, 10);
+      tft.println("Web OTA Update");
+      tft.setCursor(10, 40);
+      tft.println("Uploading...");
+      
+      setBuiltinLED(255, 165, 0);  // Orange during update
+      
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      } else {
+        // Update progress on screen
+        static unsigned long lastUpdate = 0;
+        if (millis() - lastUpdate > 1000) {  // Update every second
+          int progress = (Update.progress() * 100) / Update.size();
+          tft.fillRect(10, 70, 300, 30, TFT_BLACK);
+          tft.setCursor(10, 70);
+          tft.setTextColor(TFT_CYAN);
+          tft.printf("Progress: %d%%", progress);
+          lastUpdate = millis();
+        }
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+        tft.setCursor(10, 100);
+        tft.setTextColor(TFT_GREEN);
+        tft.println("Success!");
+        tft.setCursor(10, 130);
+        tft.println("Rebooting...");
+      } else {
+        Update.printError(Serial);
+        tft.fillScreen(TFT_RED);
+        tft.setTextColor(TFT_WHITE);
+        tft.setCursor(10, 10);
+        tft.println("Update Failed!");
+        setBuiltinLED(255, 0, 0);  // Red for error
+      }
+    }
+  });
+  
+  otaServer.begin();
+  Serial.println("OTA Web Server started on port 80");
 }

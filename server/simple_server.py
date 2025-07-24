@@ -11,15 +11,23 @@ import time
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
 import threading
 import ipaddress
+import requests
+import os
+from werkzeug.utils import secure_filename
 
 # Flask app setup
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'tricorder_control_secret'
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Create uploads directory if it doesn't exist
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # Configuration
 CONFIG = {
@@ -377,6 +385,136 @@ def get_command_status(command_id):
         return jsonify({'error': 'Command not found'}), 404
     
     return jsonify(active_commands[command_id])
+
+# Firmware Update Routes
+@app.route('/api/firmware/upload', methods=['POST'])
+def upload_firmware():
+    """Upload firmware file"""
+    try:
+        if 'firmware' not in request.files:
+            return jsonify({'error': 'No firmware file provided'}), 400
+        
+        file = request.files['firmware']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        if not file.filename.endswith('.bin'):
+            return jsonify({'error': 'File must be a .bin firmware file'}), 400
+        
+        # Save the uploaded file
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        return jsonify({
+            'success': True,
+            'filename': filename,
+            'size': os.path.getsize(filepath),
+            'path': filepath
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/devices/<device_id>/firmware/update', methods=['POST'])
+def update_device_firmware(device_id):
+    """Update firmware on a specific device"""
+    try:
+        if device_id not in devices:
+            return jsonify({'error': 'Device not found'}), 404
+        
+        data = request.get_json()
+        firmware_file = data.get('firmware_file')
+        
+        if not firmware_file:
+            return jsonify({'error': 'No firmware file specified'}), 400
+        
+        firmware_path = os.path.join(app.config['UPLOAD_FOLDER'], firmware_file)
+        if not os.path.exists(firmware_path):
+            return jsonify({'error': 'Firmware file not found'}), 404
+        
+        device = devices[device_id]
+        ip_address = device['ip_address']
+        
+        # Upload firmware to device via HTTP
+        try:
+            with open(firmware_path, 'rb') as f:
+                files = {'firmware': (firmware_file, f, 'application/octet-stream')}
+                response = requests.post(f'http://{ip_address}/update', files=files, timeout=60)
+                
+                if response.status_code == 200:
+                    return jsonify({
+                        'success': True,
+                        'message': 'Firmware update initiated successfully',
+                        'device_id': device_id,
+                        'firmware_file': firmware_file
+                    })
+                else:
+                    return jsonify({
+                        'error': f'Device returned error: {response.status_code}',
+                        'message': response.text
+                    }), 500
+        
+        except requests.exceptions.Timeout:
+            return jsonify({'error': 'Firmware update timed out (device may be restarting)'}), 408
+        except requests.exceptions.ConnectionError:
+            return jsonify({'error': 'Could not connect to device for firmware update'}), 503
+        except Exception as e:
+            return jsonify({'error': f'Firmware update failed: {str(e)}'}), 500
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/firmware/list')
+def list_firmware_files():
+    """List available firmware files"""
+    try:
+        firmware_files = []
+        upload_dir = app.config['UPLOAD_FOLDER']
+        
+        if os.path.exists(upload_dir):
+            for filename in os.listdir(upload_dir):
+                if filename.endswith('.bin'):
+                    filepath = os.path.join(upload_dir, filename)
+                    stat = os.stat(filepath)
+                    firmware_files.append({
+                        'filename': filename,
+                        'size': stat.st_size,
+                        'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        'path': filepath
+                    })
+        
+        return jsonify({'firmware_files': firmware_files})
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/devices/<device_id>/ota_status')
+def get_ota_status(device_id):
+    """Get OTA update status for a device"""
+    try:
+        if device_id not in devices:
+            return jsonify({'error': 'Device not found'}), 404
+        
+        device = devices[device_id]
+        ip_address = device['ip_address']
+        
+        try:
+            # Try to connect to device's OTA web interface
+            response = requests.get(f'http://{ip_address}/', timeout=5)
+            ota_available = response.status_code == 200
+        except:
+            ota_available = False
+        
+        return jsonify({
+            'device_id': device_id,
+            'ota_available': ota_available,
+            'ip_address': ip_address,
+            'firmware_version': device.get('firmware_version', 'Unknown')
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # WebSocket events
 @socketio.on('connect')

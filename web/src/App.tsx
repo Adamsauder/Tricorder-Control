@@ -17,6 +17,11 @@ import {
   ListItemText,
   ListItemSecondaryAction,
   IconButton,
+  Tab,
+  Tabs,
+  ThemeProvider,
+  createTheme,
+  CssBaseline,
 } from '@mui/material';
 import {
   PlayArrow,
@@ -29,7 +34,12 @@ import {
   Battery3Bar,
   BatteryFull,
   BatteryAlert,
+  Devices,
+  Computer,
+  Dashboard,
 } from '@mui/icons-material';
+import ESP32Simulator from './components/ESP32Simulator';
+import TricorderFarmDashboard from './components/TricorderFarmDashboard';
 
 interface Device {
   device_id: string;
@@ -156,89 +166,117 @@ const DeviceCard: React.FC<{ device: Device }> = ({ device }) => {
 };
 
 const App: React.FC = () => {
+  const [tabValue, setTabValue] = React.useState(0);
+
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
+  };
+
+  const handleSimulatorCommand = (command: any) => {
+    console.log('Simulator command:', command);
+    // Here you can integrate with your real device communication
+  };
+
+  // Create a theme inspired by SimplyPrint
+  const theme = createTheme({
+    palette: {
+      primary: {
+        main: '#2196f3',
+      },
+      secondary: {
+        main: '#ff4081',
+      },
+      background: {
+        default: '#f8f9fa',
+      },
+    },
+    typography: {
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    },
+    components: {
+      MuiCard: {
+        styleOverrides: {
+          root: {
+            borderRadius: 12,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          },
+        },
+      },
+      MuiButton: {
+        styleOverrides: {
+          root: {
+            borderRadius: 8,
+            textTransform: 'none',
+          },
+        },
+      },
+    },
+  });
+
   return (
-    <Box sx={{ flexGrow: 1 }}>
-      <AppBar position="static">
-        <Toolbar>
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            Tricorder Control System
-          </Typography>
-          <Chip label={`${mockDevices.filter(d => d.status === 'online').length}/${mockDevices.length} Online`} color="primary" />
-        </Toolbar>
-      </AppBar>
-      
-      <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-        <Grid container spacing={3}>
-          {/* Device Grid */}
-          <Grid item xs={12}>
-            <Typography variant="h4" gutterBottom>
-              Device Dashboard
-            </Typography>
-          </Grid>
-          
-          {mockDevices.map((device) => (
-            <Grid item xs={12} sm={6} md={4} key={device.device_id}>
-              <DeviceCard device={device} />
-            </Grid>
-          ))}
-          
-          {/* Control Panel */}
-          <Grid item xs={12} md={6}>
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                Global Controls
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      {tabValue === 0 ? (
+        <TricorderFarmDashboard />
+      ) : (
+        <Box sx={{ flexGrow: 1 }}>
+          <AppBar position="static">
+            <Toolbar>
+              <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+                Tricorder Control System - Legacy View
               </Typography>
-              <Box display="flex" gap={1} flexWrap="wrap">
-                <Button variant="contained" startIcon={<PlayArrow />}>
-                  Play All
-                </Button>
-                <Button variant="contained" startIcon={<Pause />}>
-                  Pause All
-                </Button>
-                <Button variant="contained" startIcon={<Stop />}>
-                  Stop All
-                </Button>
-                <Button variant="contained" startIcon={<VideoLibrary />}>
-                  File Manager
-                </Button>
-              </Box>
-            </Paper>
-          </Grid>
+              <Chip label={`${mockDevices.filter(d => d.status === 'online').length}/${mockDevices.length} Online`} color="primary" />
+            </Toolbar>
+          </AppBar>
           
-          {/* System Status */}
-          <Grid item xs={12} md={6}>
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                System Status
-              </Typography>
-              <List dense>
-                <ListItem>
-                  <ListItemText 
-                    primary="Server Status" 
-                    secondary="Running on localhost:8080" 
+          <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+            <Tabs value={tabValue} onChange={handleTabChange} sx={{ mb: 3 }}>
+              <Tab icon={<Dashboard />} label="Farm Dashboard" />
+              <Tab icon={<Computer />} label="ESP32 Simulator" />
+            </Tabs>
+
+            {tabValue === 1 && (
+              <Grid container spacing={3} justifyContent="center">
+                <Grid item xs={12} md={8} lg={6}>
+                  <ESP32Simulator 
+                    deviceId="SIMULATOR_001"
+                    width={320}
+                    height={240}
+                    onCommand={handleSimulatorCommand}
                   />
-                  <ListItemSecondaryAction>
-                    <Chip label="Online" color="success" size="small" />
-                  </ListItemSecondaryAction>
-                </ListItem>
-                <ListItem>
-                  <ListItemText 
-                    primary="Connected Devices" 
-                    secondary={`${mockDevices.filter(d => d.status === 'online').length} of ${mockDevices.length}`}
-                  />
-                </ListItem>
-                <ListItem>
-                  <ListItemText 
-                    primary="Network" 
-                    secondary="WiFi: TRICORDER_CONTROL"
-                  />
-                </ListItem>
-              </List>
-            </Paper>
-          </Grid>
-        </Grid>
-      </Container>
-    </Box>
+                </Grid>
+                <Grid item xs={12} md={4} lg={6}>
+                  <Paper sx={{ p: 2 }}>
+                    <Typography variant="h6" gutterBottom>
+                      Simulator Info
+                    </Typography>
+                    <Typography variant="body2" paragraph>
+                      This simulator replicates the ESP32-2432S032C-I display behavior, 
+                      showing exactly what would appear on the physical tricorder screen.
+                    </Typography>
+                    <Typography variant="body2" paragraph>
+                      <strong>Hardware Specs:</strong><br />
+                      • Display: ST7789 TFT<br />
+                      • Resolution: 320x240 pixels<br />
+                      • Color: 16-bit RGB565<br />
+                      • Frame Rate: Up to 30 FPS
+                    </Typography>
+                    <Typography variant="body2" paragraph>
+                      <strong>Features:</strong><br />
+                      • Real-time video playback simulation<br />
+                      • Brightness control<br />
+                      • Animation sequences<br />
+                      • Color test patterns<br />
+                      • Command logging
+                    </Typography>
+                  </Paper>
+                </Grid>
+              </Grid>
+            )}
+          </Container>
+        </Box>
+      )}
+    </ThemeProvider>
   );
 };
 

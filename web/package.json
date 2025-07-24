@@ -1,8 +1,11 @@
 {
   "name": "tricorder-control-web",
-  "version": "1.0.0",
-  "description": "Web interface for Tricorder Control System",
+  "version": "2.0.0",
+  "description": "Professional web interface for Tricorder Control System with OTA firmware updates",
   "type": "module",
+  "keywords": ["ESP32", "IoT", "film-props", "OTA-updates", "React", "TypeScript", "Material-UI"],
+  "author": "Adam Sauder",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

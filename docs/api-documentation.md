@@ -2,11 +2,113 @@
 
 ## Base URL
 ```
-http://localhost:8080/api
+http://localhost:5000/api
 ```
 
 ## Authentication
 Currently no authentication required for development. Production deployment should implement JWT tokens.
+
+## 🔄 Firmware Management (NEW!)
+
+### Upload Firmware
+Upload a .bin firmware file for OTA updates.
+
+```http
+POST /api/firmware/upload
+Content-Type: multipart/form-data
+```
+
+**Request:**
+- Form field: `firmware` (binary file, .bin extension required)
+
+**Response (Success):**
+```json
+{
+  "message": "Firmware uploaded successfully",
+  "filename": "tricorder_firmware_v1.2.3.bin",
+  "size": 1048576,
+  "path": "uploads/tricorder_firmware_v1.2.3.bin"
+}
+```
+
+**Response (Error):**
+```json
+{
+  "error": "Invalid file type. Only .bin files are allowed."
+}
+```
+
+### List Firmware Files
+Get all available firmware files for updates.
+
+```http
+GET /api/firmware/list
+```
+
+**Response:**
+```json
+{
+  "firmware_files": [
+    {
+      "filename": "tricorder_firmware_v1.2.3.bin",
+      "size": 1048576,
+      "modified": "2024-01-15T10:30:00Z",
+      "path": "uploads/tricorder_firmware_v1.2.3.bin"
+    }
+  ]
+}
+```
+
+### Update Device Firmware
+Trigger an OTA firmware update on a specific device.
+
+```http
+POST /api/devices/{device_id}/firmware/update
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "firmware_file": "tricorder_firmware_v1.2.3.bin"
+}
+```
+
+**Response (Success):**
+```json
+{
+  "message": "Firmware update initiated successfully",
+  "device_id": "TRICORDER_001",
+  "firmware_file": "tricorder_firmware_v1.2.3.bin",
+  "status": "updating"
+}
+```
+
+**Response (Error):**
+```json
+{
+  "error": "Device not found or not online"
+}
+```
+
+### Check OTA Status
+Check if a device is ready for OTA updates.
+
+```http
+GET /api/devices/{device_id}/ota_status
+```
+
+**Response:**
+```json
+{
+  "device_id": "TRICORDER_001",
+  "ota_available": true,
+  "ip_address": "192.168.1.100",
+  "firmware_version": "1.2.2",
+  "status": "online",
+  "last_check": "2024-01-15T10:30:00Z"
+}
+```
 
 ## Device Management
 

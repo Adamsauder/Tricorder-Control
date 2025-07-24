@@ -1,5 +1,71 @@
 # Tricorder Firmware
 
+ESP32-based firmware for film set prop cont```
+
+## 🔄 Over-The-Air (OTA) Updates
+
+### OTA Update Features
+- **🌐 Web-based Updates**: Upload firmware via web interface, no USB needed
+- **📡 ArduinoOTA Support**: Standard Arduino OTA library integration  
+- **📤 HTTP Upload Server**: Direct firmware upload to device
+- **📊 Visual Progress**: Real-time update progress on device screen
+- **🔐 Password Protection**: Secure updates with configurable password
+- **⚠️ Error Recovery**: Automatic rollback on update failure
+- **🔄 Auto-restart**: Device restarts automatically after successful update
+
+### How OTA Updates Work
+1. **Device advertises** OTA capability via mDNS
+2. **Central server** detects available devices
+3. **Web interface** allows firmware file upload and device selection
+4. **Device receives** firmware via HTTP upload or ArduinoOTA
+5. **Progress displayed** on device screen during update
+6. **Device restarts** with new firmware automatically
+
+### OTA Update Process
+```
+Server                     ESP32 Device
+------                     ------------
+1. Upload .bin file  →    
+2. Select device     →    
+3. Send update cmd   →     4. Enter OTA mode
+                           5. Display progress
+                           6. Validate firmware
+                           7. Flash new firmware
+                           8. Restart device
+```
+
+### OTA Configuration
+```cpp
+// OTA settings in main.cpp
+#define OTA_PASSWORD "tricorder123"  // Change this!
+#define OTA_PORT 3232
+#define OTA_HOSTNAME "tricorder_001"  // Auto-generated from device ID
+```
+
+## Video Playback Setup
+
+The tricorder supports video playback from SD card using JPEG image sequences. For detailed setup instructions, see:
+
+📹 **[VIDEO_PLAYBACK_GUIDE.md](VIDEO_PLAYBACK_GUIDE.md)** - Complete video setup and usage guide
+
+### Quick Start for Videos
+1. Format SD card as FAT32
+2. Create `/videos/` directory on SD card
+3. Convert videos to JPEG format (320x240 recommended)
+4. Use UDP commands to control playbackembedded screens, NeoPixel LEDs, and **Over-The-Air (OTA) update capabilities**.
+
+## 🚀 Features
+
+- **🔄 Over-The-Air Updates**: ArduinoOTA + HTTP upload server with visual progress
+- **📺 Video Playback**: JPEG sequence playback from SD card with loop controls
+- **🌈 NeoPixel Control**: 12-channel RGB LED control with animations and SACN support
+- **🖥️ TFT Display**: 3.2" ST7789 color display (320x240) with video playback
+- **📡 WiFi Connectivity**: Auto-connect with reconnection handling and mDNS discovery
+- **⚡ UDP Commands**: Low-latency command processing (< 50ms)
+- **🔍 Health Monitoring**: Memory, WiFi, and performance monitoring
+- **💾 SD Card Support**: Video storage and file management
+- **🔐 Secure Updates**: Password-protected OTA with error recoveryrmware
+
 ESP32-based firmware for film set prop controllers with embedded screens and NeoPixel LEDs.
 
 ## Features

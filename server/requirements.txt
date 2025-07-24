@@ -1,11 +1,28 @@
-# Server Requirements
+# Tricorder Control System - Server Requirements
+# Version 2.0.0 - "OTA Revolution" Release
+
+# Core web framework
+flask==3.0.0
+werkzeug==3.0.1
+
+# OTA Firmware Update Support (NEW!)
+requests==2.31.0
+
+# API and web serving
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 python-multipart==0.0.6
+
+# File handling and async operations
 aiofiles==23.2.1
-redis==5.0.1
+pillow==10.1.0
+
+# WebSocket support for real-time updates
 websockets==12.0
+redis==5.0.1
+
+# Template rendering and security
 jinja2==3.1.2
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4

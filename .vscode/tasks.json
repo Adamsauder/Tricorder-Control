@@ -26,7 +26,7 @@
       "type": "shell",
       "command": "C:/Tricorder Control/Tricorder-Control/.venv/Scripts/python.exe",
       "args": [
-        "server/simple_server.py"
+        "server/enhanced_server.py"
       ],
       "group": "build",
       "isBackground": true,
@@ -41,10 +41,14 @@
     {
       "label": "Install Web Dependencies",
       "type": "shell",
-      "command": "npm",
-      "args": ["install"],
+      "command": "cmd",
+      "args": ["/c", "npm", "install"],
       "options": {
-        "cwd": "${workspaceFolder}/web"
+        "cwd": "${workspaceFolder}/web",
+        "shell": {
+          "executable": "cmd.exe",
+          "args": ["/d", "/c"]
+        }
       },
       "group": "build",
       "presentation": {
@@ -58,10 +62,14 @@
     {
       "label": "Start Web Development Server",
       "type": "shell",
-      "command": "npm",
-      "args": ["run", "dev"],
+      "command": "cmd",
+      "args": ["/c", "npm", "run", "dev"],
       "options": {
-        "cwd": "${workspaceFolder}/web"
+        "cwd": "${workspaceFolder}/web",
+        "shell": {
+          "executable": "cmd.exe",
+          "args": ["/d", "/c"]
+        }
       },
       "group": "build",
       "isBackground": true,
@@ -76,10 +84,14 @@
     {
       "label": "Build Web Application",
       "type": "shell",
-      "command": "npm",
-      "args": ["run", "build"],
+      "command": "cmd",
+      "args": ["/c", "npm", "run", "build"],
       "options": {
-        "cwd": "${workspaceFolder}/web"
+        "cwd": "${workspaceFolder}/web",
+        "shell": {
+          "executable": "cmd.exe",
+          "args": ["/d", "/c"]
+        }
       },
       "group": "build",
       "presentation": {

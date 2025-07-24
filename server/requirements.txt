@@ -1,39 +1,22 @@
 # Tricorder Control System - Server Requirements
 # Version 2.0.0 - "OTA Revolution" Release
 
-# Core web framework
+# Core web framework and WebSocket support
 flask==3.0.0
+flask-socketio==5.3.6
 werkzeug==3.0.1
 
-# OTA Firmware Update Support (NEW!)
+# HTTP requests
 requests==2.31.0
 
-# API and web serving
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-python-multipart==0.0.6
+# Image processing for ESP32 Simulator
+pillow>=10.2.0
 
-# File handling and async operations
-aiofiles==23.2.1
-pillow==10.1.0
+# Optional: Service discovery
+zeroconf==0.131.0
 
-# WebSocket support for real-time updates
-websockets==12.0
-redis==5.0.1
-
-# Template rendering and security
-jinja2==3.1.2
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-
-# Simple server requirements
-flask==2.3.3
-flask-socketio==5.3.6
-requests==2.31.0
-
-# ESP32 Simulator requirements
-pillow==10.1.0
+# Optional: System monitoring
+psutil==5.9.6
 
 # Note: sqlite3 is built into Python, no need to install separately
 

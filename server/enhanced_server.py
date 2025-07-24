@@ -36,6 +36,8 @@ CONFIG = {
 devices: Dict[str, Dict] = {}
 active_commands: Dict[str, Dict] = {}
 command_history: List[Dict] = []
+server_ip: Optional[str] = None
+server_start_time = time.time()
 
 # Simulator color mappings
 COLORS = {
@@ -48,6 +50,19 @@ COLORS = {
     'white': (255, 255, 255),
     'black': (0, 0, 0),
 }
+
+def get_server_ip():
+    """Get the server's IP address"""
+    global server_ip
+    if server_ip is None:
+        try:
+            # Connect to a remote address to determine local IP
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                server_ip = s.getsockname()[0]
+        except Exception:
+            server_ip = "127.0.0.1"
+    return server_ip or "127.0.0.1"
 
 def create_color_frame(color_name, width=320, height=240):
     """Create a solid color frame"""
@@ -159,12 +174,12 @@ class TricorderServer:
             
             while self.running:
                 try:
-                    data, addr = self.udp_socket.recvfrom(1024)
+                    data, addr = self.udp_socket.recvfrom(4096)  # Increased buffer size like original
                     self.handle_device_message(data.decode('utf-8'), addr)
                 except socket.timeout:
                     continue
                 except Exception as e:
-                    print(f"UDP error: {e}")
+                    print(f"❌ UDP error: {e}")
                     
         except Exception as e:
             print(f"Failed to start UDP listener: {e}")
@@ -173,27 +188,58 @@ class TricorderServer:
         """Handle incoming device messages"""
         try:
             data = json.loads(message)
-            device_id = data.get('device_id', f'UNKNOWN_{addr[0]}')
+            print(f"📡 Received from {addr}: {message}")
             
-            # Update device registry
+            # Skip messages from the server itself
+            if addr[0] == get_server_ip():
+                print(f"🚫 Ignoring message from server IP: {addr[0]}")
+                return
+            
+            # Handle both 'deviceId' (from ESP32) and 'device_id' formats
+            device_id = data.get('deviceId') or data.get('device_id', f'UNKNOWN_{addr[0]}')
+            
+            # Only process messages from actual ESP32 devices (they should have deviceId starting with TRICORDER_)
+            if not device_id.startswith('TRICORDER_'):
+                print(f"🚫 Ignoring non-tricorder device: {device_id} from {addr[0]}")
+                return
+            
+            # Update device registry with comprehensive info
             devices[device_id] = {
                 'device_id': device_id,
                 'ip_address': addr[0],
                 'port': addr[1],
                 'last_seen': datetime.now().isoformat(),
                 'status': 'online',
-                **data
+                # ESP32-specific fields
+                'firmware_version': data.get('firmwareVersion'),
+                'wifi_connected': data.get('wifiConnected'),
+                'free_heap': data.get('freeHeap'),
+                'uptime': data.get('uptime'),
+                'sd_card_initialized': data.get('sdCardInitialized'),
+                'video_playing': data.get('videoPlaying'),
+                'current_video': data.get('currentVideo'),
+                'video_looping': data.get('videoLooping'),
+                'current_frame': data.get('currentFrame'),
+                **data  # Include any additional fields
             }
             
-            print(f"Device update from {device_id}: {data}")
+            print(f"✓ Updated device: {device_id} at {addr[0]}")
             
             # Broadcast to web clients
             socketio.emit('device_update', devices[device_id])
+            print(f"📡 Emitted device_update for {device_id}")
+            
+            # Also broadcast the raw response for command handling
+            socketio.emit('device_response', {
+                'device_id': device_id,
+                'response': data
+            })
+            print(f"📡 Emitted device_response for {device_id}: {data.get('result', 'No result')}")
             
         except json.JSONDecodeError:
-            print(f"Invalid JSON from {addr}: {message}")
+            print(f"⚠️ Invalid JSON from {addr}: {message}")
         except Exception as e:
-            print(f"Error handling message from {addr}: {e}")
+            print(f"❌ Error handling message from {addr}: {e}")
 
 # Initialize server
 server = TricorderServer()
@@ -224,9 +270,11 @@ def index():
             
             <div class="status">
                 <h2>Server Status</h2>
+                <p>🖥️ Server IP: <span id="server-ip">''' + get_server_ip() + '''</span></p>
                 <p>✅ UDP Server running on port ''' + str(CONFIG['udp_port']) + '''</p>
                 <p>✅ Web Server running on port ''' + str(CONFIG['web_port']) + '''</p>
                 <p>📱 Connected Devices: <span id="device-count">0</span></p>
+                <button onclick="refreshServerInfo()" style="background: #2196F3; margin-top: 10px;">🔄 Refresh Server Info</button>
             </div>
 
             <div class="status">
@@ -239,8 +287,13 @@ def index():
             
             <div class="status">
                 <h2>Connected Devices</h2>
+                <div style="margin-bottom: 15px;">
+                    <button onclick="startDiscovery()" style="background: #4CAF50;">🔍 Search for Devices</button>
+                    <input type="text" id="deviceIP" placeholder="192.168.1.xxx" style="padding: 8px; margin: 0 10px; border: 1px solid #ccc; border-radius: 4px;">
+                    <button onclick="addDevice()" style="background: #FF9800;">➕ Add Device Manually</button>
+                </div>
                 <div id="devices" class="devices">
-                    <p>No devices connected. Start your ESP32 tricorders to see them here.</p>
+                    <p>No devices connected. Use the buttons above to discover or add devices.</p>
                 </div>
             </div>
         </div>
@@ -255,8 +308,16 @@ def index():
                 updateDeviceDisplay();
             });
             
+            // Store devices data globally so updateDeviceDisplay can access it
+            window.devicesData = {};
+            
+            socket.on('device_update', function(device) {
+                window.devicesData[device.device_id] = device;
+                updateDeviceDisplay();
+            });
+            
             function updateDeviceDisplay() {
-                const deviceList = Object.values(''' + json.dumps({}) + ''');
+                const deviceList = Object.values(window.devicesData || {});
                 deviceCount.textContent = deviceList.length;
                 
                 if (deviceList.length === 0) {
@@ -267,12 +328,27 @@ def index():
                 devicesDiv.innerHTML = deviceList.map(device => `
                     <div class="device ${device.status}">
                         <h3>${device.device_id}</h3>
-                        <p>IP: ${device.ip_address}</p>
-                        <p>Status: ${device.status}</p>
-                        <p>Last seen: ${new Date(device.last_seen).toLocaleString()}</p>
-                        <button onclick="sendCommand('${device.device_id}', 'play_video', 'startup.jpg')">Play Startup</button>
-                        <button onclick="sendCommand('${device.device_id}', 'play_video', 'color_red.jpg')">Red</button>
-                        <button onclick="sendCommand('${device.device_id}', 'stop_video', '')">Stop</button>
+                        <p><strong>IP:</strong> ${device.ip_address}</p>
+                        <p><strong>Status:</strong> ${device.status}</p>
+                        <p><strong>Last seen:</strong> ${new Date(device.last_seen).toLocaleString()}</p>
+                        ${device.firmware_version ? `<p><strong>Firmware:</strong> ${device.firmware_version}</p>` : ''}
+                        ${device.free_heap ? `<p><strong>Free Heap:</strong> ${device.free_heap} bytes</p>` : ''}
+                        ${device.video_playing ? `<p><strong>Video:</strong> ${device.current_video || 'Playing'} ${device.video_looping ? '(Looping)' : ''}</p>` : ''}
+                        <div style="margin-top: 10px;">
+                            <button onclick="sendCommand('${device.device_id}', 'play_video', 'startup.jpg')">Play Startup</button>
+                            <br><br>
+                            <strong>💡 LED Controls:</strong><br>
+                            <button onclick="sendLEDColor('${device.device_id}', 255, 0, 0)" style="background: #ff4444; margin: 2px;">🔴 Red</button>
+                            <button onclick="sendLEDColor('${device.device_id}', 0, 255, 0)" style="background: #44ff44; margin: 2px;">🟢 Green</button>
+                            <button onclick="sendLEDColor('${device.device_id}', 0, 0, 255)" style="background: #4444ff; margin: 2px;">🔵 Blue</button>
+                            <button onclick="sendLEDColor('${device.device_id}', 255, 255, 0)" style="background: #ffff44; color: black; margin: 2px;">🟡 Yellow</button>
+                            <button onclick="sendLEDColor('${device.device_id}', 255, 0, 255)" style="background: #ff44ff; margin: 2px;">🟣 Magenta</button>
+                            <button onclick="sendLEDColor('${device.device_id}', 0, 255, 255)" style="background: #44ffff; color: black; margin: 2px;">🔵 Cyan</button>
+                            <button onclick="sendLEDColor('${device.device_id}', 255, 255, 255)" style="background: #ffffff; color: black; margin: 2px;">⚪ White</button>
+                            <button onclick="sendLEDColor('${device.device_id}', 0, 0, 0)" style="background: #666666; margin: 2px;">⚫ Off</button>
+                            <br><br>
+                            <button onclick="sendCommand('${device.device_id}', 'stop_video', '')">Stop Video</button>
+                        </div>
                     </div>
                 `).join('');
             }
@@ -288,6 +364,131 @@ def index():
                     })
                 });
             }
+            
+            function sendLEDColor(deviceId, r, g, b) {
+                // Simple debouncing to prevent rapid clicks
+                const now = Date.now();
+                if (window.lastLEDCommand && (now - window.lastLEDCommand) < 200) {
+                    console.log('⏳ LED command ignored (too fast)');
+                    return;
+                }
+                window.lastLEDCommand = now;
+                
+                console.log(`Setting LED color for ${deviceId} to RGB(${r}, ${g}, ${b})`);
+                fetch('/api/command', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        device_id: deviceId,
+                        action: 'set_builtin_led',
+                        parameters: {
+                            r: r,
+                            g: g,
+                            b: b
+                        }
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('LED command response:', data);
+                    if (data.status === 'sent') {
+                        console.log(`✅ LED color command sent to ${deviceId}`);
+                    }
+                })
+                .catch(error => {
+                    console.error('LED command error:', error);
+                    alert('Failed to send LED color command');
+                });
+            }
+            
+            function startDiscovery() {
+                console.log('Starting device discovery...');
+                fetch('/api/discovery', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Discovery response:', data);
+                    if (data.status) {
+                        alert('Device discovery started! Check console for details.');
+                    } else if (data.error) {
+                        alert('Discovery failed: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Discovery error:', error);
+                    alert('Failed to start discovery scan');
+                });
+            }
+            
+            function refreshServerInfo() {
+                console.log('Refreshing server info...');
+                fetch('/api/server_info')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Server info:', data);
+                    document.getElementById('server-ip').textContent = data.server_ip;
+                    document.getElementById('device-count').textContent = data.device_count.toString();
+                    alert(`Server Info Updated!\\nIP: ${data.server_ip}\\nDevices: ${data.device_count}\\nUptime: ${Math.round(data.uptime)}s`);
+                })
+                .catch(error => {
+                    console.error('Server info error:', error);
+                    alert('Failed to refresh server info');
+                });
+            }
+            
+            function addDevice() {
+                const ipInput = document.getElementById('deviceIP');
+                const ipAddress = ipInput.value.trim();
+                
+                if (!ipAddress) {
+                    alert('Please enter an IP address');
+                    return;
+                }
+                
+                console.log('Adding device:', ipAddress);
+                fetch('/api/add_device', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        ip_address: ipAddress
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Add device response:', data);
+                    if (data.status) {
+                        alert('Device add initiated! Check if device appears in the list.');
+                        ipInput.value = ''; // Clear input
+                    } else if (data.error) {
+                        alert('Add device failed: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Add device error:', error);
+                    alert('Failed to add device');
+                });
+            }
+            
+            // Load existing devices when page loads
+            function loadDevices() {
+                fetch('/api/devices')
+                .then(response => response.json())
+                .then(devices => {
+                    console.log('Loaded devices:', devices);
+                    devices.forEach(device => {
+                        window.devicesData[device.device_id] = device;
+                    });
+                    updateDeviceDisplay();
+                })
+                .catch(error => {
+                    console.error('Failed to load devices:', error);
+                });
+            }
+            
+            // Load devices on page load
+            window.addEventListener('load', loadDevices);
         </script>
     </body>
     </html>
@@ -468,6 +669,108 @@ def get_devices():
     """Get all connected devices"""
     return jsonify(list(devices.values()))
 
+@app.route('/api/server_info')
+def get_server_info():
+    """Get server information"""
+    return jsonify({
+        'server_ip': get_server_ip(),
+        'udp_port': CONFIG['udp_port'],
+        'web_port': CONFIG['web_port'],
+        'device_count': len(devices),
+        'uptime': time.time() - server_start_time if 'server_start_time' in globals() else 0,
+        'status': 'running'
+    })
+
+@app.route('/api/discovery', methods=['POST'])
+def start_discovery():
+    """Manually trigger device discovery"""
+    try:
+        print("🔍 Discovery scan initiated")
+        
+        # Send discovery command to IP range
+        discovery_command = {
+            'id': str(uuid.uuid4()),
+            'action': 'discovery',
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Scan common IP ranges for ESP32 devices
+        ip_ranges = [
+            "192.168.1.{}", # Common home router range
+            "192.168.0.{}", # Alternative home router range
+            "10.0.0.{}",    # Some router configurations
+        ]
+        
+        devices_found = 0
+        
+        if server.udp_socket:
+            command_json = json.dumps(discovery_command)
+            
+            # For each IP range, scan common device IPs
+            for ip_template in ip_ranges:
+                # Scan from .2 to .254 (skip .1 as it's usually the router, and .255 is broadcast)
+                for i in range(2, 255):
+                    target_ip = ip_template.format(i)
+                    try:
+                        # Send discovery command
+                        server.udp_socket.sendto(
+                            command_json.encode('utf-8'),
+                            (target_ip, CONFIG['udp_port'])
+                        )
+                        devices_found += 1
+                        
+                        # Add small delay to prevent network flooding
+                        if devices_found % 50 == 0:
+                            import time
+                            time.sleep(0.1)
+                            
+                    except Exception as e:
+                        # Skip IPs that can't be reached
+                        continue
+            
+            print(f"📤 Sent discovery to {devices_found} IP addresses across multiple ranges")
+            return jsonify({'status': f'Discovery scan initiated - scanned {devices_found} IP addresses'})
+        else:
+            return jsonify({'error': 'UDP socket not available'}), 500
+            
+    except Exception as e:
+        print(f"❌ Discovery error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/add_device', methods=['POST'])
+def add_device():
+    """Manually add a device by IP address"""
+    try:
+        data = request.get_json()
+        ip_address = data.get('ip_address')
+        
+        if not ip_address:
+            return jsonify({'error': 'IP address is required'}), 400
+        
+        print(f"➕ Adding device at {ip_address}")
+        
+        # Send a ping command to the device
+        ping_command = {
+            'id': str(uuid.uuid4()),
+            'action': 'ping',
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        if server.udp_socket:
+            command_json = json.dumps(ping_command)
+            server.udp_socket.sendto(
+                command_json.encode('utf-8'),
+                (ip_address, CONFIG['udp_port'])
+            )
+            print(f"📤 Sent ping to {ip_address}")
+            return jsonify({'status': f'Device add initiated - sent ping to {ip_address}'})
+        else:
+            return jsonify({'error': 'UDP socket not available'}), 500
+            
+    except Exception as e:
+        print(f"❌ Add device error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/command', methods=['POST'])
 def send_command():
     """Send command to device"""
@@ -476,41 +779,57 @@ def send_command():
         device_id = data.get('device_id')
         action = data.get('action')
         command_data = data.get('data', '')
+        parameters = data.get('parameters', {})
         
         if not device_id or not action:
             return jsonify({'error': 'Missing device_id or action'}), 400
         
-        # Create command
-        command = {
-            'id': str(uuid.uuid4()),
-            'device_id': device_id,
+        # Create command in format ESP32 expects
+        esp32_command = {
+            'commandId': str(uuid.uuid4()),
             'action': action,
-            'data': command_data,
             'timestamp': datetime.now().isoformat()
         }
         
-        # Store command
-        active_commands[command['id']] = command
-        command_history.append(command)
+        # Add parameters if provided (for LED commands)
+        if parameters:
+            esp32_command['parameters'] = parameters
+        
+        # Add data if provided (for other commands)
+        if command_data:
+            esp32_command['parameters'] = {'filename': command_data}
+        
+        # Store command for tracking
+        command_record = {
+            'id': esp32_command['commandId'],
+            'device_id': device_id,
+            'action': action,
+            'data': command_data,
+            'parameters': parameters,
+            'timestamp': datetime.now().isoformat()
+        }
+        active_commands[command_record['id']] = command_record
+        command_history.append(command_record)
         
         # Send to device (if connected)
         if device_id in devices:
             device = devices[device_id]
             try:
-                # Send UDP command
-                command_json = json.dumps(command)
+                # Send UDP command in ESP32 format
+                command_json = json.dumps(esp32_command)
                 if server.udp_socket:
                     server.udp_socket.sendto(
                         command_json.encode('utf-8'),
                         (device['ip_address'], CONFIG['udp_port'])
                     )
                 print(f"Sent command to {device_id}: {action}")
+                print(f"Command JSON: {command_json}")
                 
             except Exception as e:
                 print(f"Failed to send command to {device_id}: {e}")
                 return jsonify({'error': f'Failed to send command: {e}'}), 500
         
-        return jsonify({'success': True, 'command_id': command['id']})
+        return jsonify({'status': 'sent', 'command_id': esp32_command['commandId']})
         
     except Exception as e:
         print(f"Command error: {e}")

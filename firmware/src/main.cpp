@@ -31,8 +31,8 @@
 #define RGB_LED_B 17       // Blue channel
 
 // Video playback settings
-#define FRAME_DELAY_MS 66  // ~15 FPS (1000ms / 15)
-#define VIDEO_BUFFER_SIZE 8192
+#define FRAME_DELAY_MS 33  // ~30 FPS (1000ms / 30)
+#define VIDEO_BUFFER_SIZE 12288  // 12KB buffer for larger JPEG frames
 
 // Network configuration
 const char* WIFI_SSID = "Rigging Electric";
@@ -415,6 +415,25 @@ bool playVideo(String filename, bool loop) {
       }
       animDir.close();
       
+      // Sort frame files to ensure correct playback order
+      if (totalFrames > 1) {
+        for (int i = 0; i < totalFrames - 1; i++) {
+          for (int j = i + 1; j < totalFrames; j++) {
+            if (frameFiles[i] > frameFiles[j]) {
+              String temp = frameFiles[i];
+              frameFiles[i] = frameFiles[j];
+              frameFiles[j] = temp;
+            }
+          }
+        }
+        Serial.println("Sorted frame files:");
+        for (int i = 0; i < totalFrames; i++) {
+          Serial.printf("  Frame %d: %s\n", i, frameFiles[i].c_str());
+        }
+      }
+      
+      Serial.printf("Animation loaded: %d frames total\n", totalFrames);
+      
       if (totalFrames > 0) {
         isAnimatedSequence = true;
         Serial.printf("Loaded %d frames for animation: %s\n", totalFrames, filename.c_str());
@@ -574,18 +593,22 @@ void updateVideoPlayback() {
   
   // For animated sequences, check if it's time for the next frame
   if (currentTime - lastFrameTime >= FRAME_DELAY_MS) {
+    Serial.printf("Frame timer triggered - currentFrame: %d, totalFrames: %d\n", currentFrame, totalFrames);
     showVideoFrame();
     lastFrameTime = currentTime;
     currentFrame++;
+    Serial.printf("Advanced to frame %d\n", currentFrame);
     
     // Check if we've reached the end of the animation
     if (currentFrame >= totalFrames) {
+      Serial.printf("Animation complete - currentFrame %d >= totalFrames %d\n", currentFrame, totalFrames);
       if (videoLooping) {
         // Restart animation
         currentFrame = 0;
         Serial.println("Looping animation...");
       } else {
         // Stop animation
+        Serial.println("Stopping animation (not looping)");
         stopVideo();
       }
     }
@@ -597,13 +620,32 @@ void showVideoFrame() {
     return;
   }
   
+  // Validate frame index
+  if (currentFrame < 0 || currentFrame >= totalFrames) {
+    Serial.printf("ERROR: Invalid frame index %d (totalFrames: %d)\n", currentFrame, totalFrames);
+    return;
+  }
+  
   // Get the current frame file path
   String currentFramePath = frameFiles[currentFrame];
+  Serial.printf("Attempting to show frame %d: %s\n", currentFrame, currentFramePath.c_str());
   
   // Open and display the current frame
   File frameFile = SD.open(currentFramePath, FILE_READ);
   if (!frameFile) {
-    Serial.printf("Failed to open frame file: %s\n", currentFramePath.c_str());
+    Serial.printf("ERROR: Failed to open frame file: %s\n", currentFramePath.c_str());
+    Serial.printf("This was frame %d of %d\n", currentFrame, totalFrames);
+    
+    // Skip this frame and try the next one
+    currentFrame++;
+    if (currentFrame >= totalFrames) {
+      Serial.println("Reached end due to failed frame load, restarting...");
+      if (videoLooping) {
+        currentFrame = 0;
+      } else {
+        stopVideo();
+      }
+    }
     return;
   }
   
@@ -626,15 +668,17 @@ void showVideoFrame() {
       
       // Decode and display
       if (jpeg.decode(0, 0, 0)) {
-        Serial.printf("Displayed frame %d/%d: %s\n", currentFrame + 1, totalFrames, currentFramePath.c_str());
+        Serial.printf("SUCCESS: Displayed frame %d/%d: %s\n", currentFrame + 1, totalFrames, currentFramePath.c_str());
       } else {
-        Serial.println("JPEG decode failed");
+        Serial.printf("ERROR: JPEG decode failed for frame %d: %s\n", currentFrame, currentFramePath.c_str());
       }
       
       jpeg.close();
     } else {
-      Serial.println("JPEG open failed");
+      Serial.printf("ERROR: JPEG open failed for frame %d: %s\n", currentFrame, currentFramePath.c_str());
     }
+  } else {
+    Serial.printf("ERROR: No bytes read from frame %d: %s\n", currentFrame, currentFramePath.c_str());
   }
 }
 

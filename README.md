@@ -196,7 +196,13 @@ This system controls up to 20+ ESP32-based "tricorder" props, each featuring:
 - ✅ Web interface fully functional
 - ✅ Integration testing completed successfully
 
-## 🚀 **What We Accomplished**
+## � **Web Interface Preview**
+
+![Tricorder Control Dashboard](dashboard-screenshot.png)
+
+*Professional React TypeScript dashboard with Material-UI components, featuring real-time device management, OTA firmware updates, and ESP32 simulator.*
+
+## �🚀 **What We Accomplished**
 
 ### **Major Achievement: Complete OTA Update System**
 We built a **comprehensive wireless firmware update system** that eliminates the need for USB connections:

@@ -192,7 +192,7 @@ const int UDP_PORT = 8888;
 ### Device Settings
 ```cpp
 String deviceId = "TRICORDER_001";  // Auto-generated from MAC
-String firmwareVersion = "1.0.0";
+String firmwareVersion = "0.1";
 int sacnUniverse = 1;               // SACN universe assignment
 int sacnStartChannel = 1;           // Starting DMX channel
 ```
@@ -204,7 +204,7 @@ int sacnStartChannel = 1;           // Starting DMX channel
 GET /status
 Response: {
   "device_id": "TRICORDER_001",
-  "firmware_version": "1.0.0",
+  "firmware_version": "0.1",
   "wifi_connected": true,
   "ip_address": "192.168.1.100",
   "current_video": "scene1.mp4",

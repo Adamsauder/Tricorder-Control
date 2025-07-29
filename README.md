@@ -1,4 +1,5 @@
 # Tricorder Control System
+**Version 0.1**
 
 A comprehensive control system for ESP32-based film set props with embedded screens, NeoPixel LEDs, and ## 📊 Project Status & Accomplishments
 

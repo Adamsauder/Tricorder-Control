@@ -1,5 +1,45 @@
 # 🚀 Release Notes - Tricorder Control System
 
+## Version 0.1 - "First Light" ✨
+**Release Date: July 29, 2025**
+
+### 🎉 **Initial Release Features**
+
+#### 🖼️ **Image Display System**
+- ✅ **Full JPEG Support**: Display static images from SD card
+- ✅ **LCARS Boot Screen**: Custom boot.jpg background with centered text
+- ✅ **Smooth Transitions**: Eliminated black screen flashing during image loads
+- ✅ **Multiple File Locations**: Auto-search in root and /videos directories
+- ✅ **Smart Buffer Management**: 64KB buffer with fallback allocation system
+
+#### 🌐 **Web Control Interface**
+- ✅ **Real-time Control**: Web dashboard for device management
+- ✅ **Image Buttons**: Direct control for greenscreen, test, and test2 images
+- ✅ **Boot Screen Command**: "Play Startup" button returns to LCARS boot display
+- ✅ **Device Discovery**: Automatic device detection and status monitoring
+
+#### 🔧 **Core System**
+- ✅ **ESP32 Firmware**: Stable firmware with WiFi connectivity
+- ✅ **SD Card Support**: Reliable file reading with chunked I/O
+- ✅ **UDP Commands**: Fast, responsive command protocol
+- ✅ **Error Handling**: Comprehensive diagnostics and fallback systems
+
+#### 💡 **LED Integration**
+- ✅ **NeoPixel Control**: External LED strip support
+- ✅ **Built-in RGB LED**: Status indication during boot and operation
+- ✅ **Visual Feedback**: Color-coded status (blue=boot, green=ready, red=error)
+
+### 🏗️ **Technical Achievements**
+- **Memory Optimization**: Intelligent buffer allocation with multiple fallback sizes
+- **File System Reliability**: Robust SD card operations with comprehensive error handling
+- **Display Performance**: Seamless image transitions without visual artifacts
+- **Network Stability**: Reliable WiFi connection and UDP command processing
+
+### 📝 **Version 0.1 Scope**
+This initial release establishes the foundation for the Tricorder Control System with essential image display capabilities and web-based control. Perfect for basic film set prop applications requiring reliable image display and remote control.
+
+---
+
 ## Version 2.0.0 - "OTA Revolution" 
 **Release Date: July 23, 2025**
 

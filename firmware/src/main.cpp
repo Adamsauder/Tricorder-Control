@@ -44,7 +44,7 @@ const int UDP_PORT = 8888;
 
 // Device identification
 String deviceId = "TRICORDER_001";
-String firmwareVersion = "1.0.0";
+String firmwareVersion = "0.1";
 
 // Hardware objects
 CRGB leds[NUM_LEDS];

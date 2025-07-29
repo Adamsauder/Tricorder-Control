@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"name": "firmware",
+			"path": "../firmware"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "Tricorder-Control",
+		"files.associations": {
+			"random": "cpp"
+		}
+	}
+}

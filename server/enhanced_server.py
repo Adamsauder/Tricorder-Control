@@ -335,7 +335,10 @@ def index():
                         ${device.free_heap ? `<p><strong>Free Heap:</strong> ${device.free_heap} bytes</p>` : ''}
                         ${device.video_playing ? `<p><strong>Video:</strong> ${device.current_video || 'Playing'} ${device.video_looping ? '(Looping)' : ''}</p>` : ''}
                         <div style="margin-top: 10px;">
+                            <strong>📺 Image Controls:</strong><br>
                             <button onclick="sendCommand('${device.device_id}', 'play_video', 'startup.jpg')">Play Startup</button>
+                            <button onclick="sendImageCommand('${device.device_id}', 'greenscreen.jpg')" style="background: #00ff00; color: black; margin: 2px;">🟩 Green Screen</button>
+                            <button onclick="sendImageCommand('${device.device_id}', 'test.jpg')" style="background: #ffcc00; color: black; margin: 2px;">📺 Test Card</button>
                             <br><br>
                             <strong>💡 LED Controls:</strong><br>
                             <button onclick="sendLEDColor('${device.device_id}', 255, 0, 0)" style="background: #ff4444; margin: 2px;">🔴 Red</button>
@@ -361,6 +364,20 @@ def index():
                         device_id: deviceId,
                         action: action,
                         data: data
+                    })
+                });
+            }
+            
+            function sendImageCommand(deviceId, filename) {
+                fetch('/api/command', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        device_id: deviceId,
+                        action: 'display_image',
+                        parameters: {
+                            filename: filename
+                        }
                     })
                 });
             }

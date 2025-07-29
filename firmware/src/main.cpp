@@ -15,7 +15,6 @@
 #include <JPEGDEC.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
-#include <WebServer.h>
 #include <HTTPClient.h>
 
 // Pin definitions for ESP32-2432S032C-I
@@ -36,7 +35,7 @@
 
 // Video playback settings
 #define FRAME_DELAY_MS 33  // ~30 FPS (1000ms / 30)
-#define VIDEO_BUFFER_SIZE 12288  // 12KB buffer for larger JPEG frames
+#define VIDEO_BUFFER_SIZE 32768  // 32KB buffer for larger image files
 
 // Network configuration
 const char* WIFI_SSID = "Rigging Electric";
@@ -44,7 +43,7 @@ const char* WIFI_PASSWORD = "academy123";
 const int UDP_PORT = 8888;
 
 // Device identification
-String deviceId = ""; // Will be set based on MAC address
+String deviceId = "TRICORDER_001";
 String firmwareVersion = "1.0.0";
 
 // Hardware objects
@@ -52,7 +51,7 @@ CRGB leds[NUM_LEDS];
 TFT_eSPI tft = TFT_eSPI();
 WiFiUDP udp;
 JPEGDEC jpeg;
-WebServer otaServer(80);  // Web server for OTA updates
+// AsyncWebServer otaServer(80);  // Web server for OTA updates - commented out for now
 
 // Video playback objects
 File videoFile;
@@ -94,23 +93,11 @@ void updateVideoPlayback();
 bool listVideos();
 String getVideoList();
 void showVideoFrame();
-void setupOTA();
-void setupOTAWebServer();
-void showModernBootScreen();
-void updateBootStatus(String component, String status, uint16_t color, bool checkmark);
-void updateBootIP(String ipAddress);
-void showBootComplete();
+bool displayStaticImage(String filename);
 
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting Tricorder Control System...");
-  
-  // Generate unique device ID based on MAC address
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-  deviceId = "TRICORDER_" + String(mac[3], HEX) + String(mac[4], HEX) + String(mac[5], HEX);
-  deviceId.toUpperCase();
-  Serial.printf("Device ID: %s\n", deviceId.c_str());
   
   // Allocate video buffer
   videoBuffer = (uint8_t*)malloc(VIDEO_BUFFER_SIZE);
@@ -141,11 +128,15 @@ void setup() {
   ledcAttachPin(TFT_BL, 0);
   ledcWrite(0, 255); // Full brightness
   
-  // Modern boot screen design
-  showModernBootScreen();
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextSize(2);
+  tft.setCursor(10, 10);
+  tft.println("Tricorder Booting...");
   
   // Initialize WiFi
-  updateBootStatus("WIFI", "Connecting...", TFT_YELLOW, false);
+  tft.setCursor(10, 40);
+  tft.println("Connecting WiFi...");
   
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -155,16 +146,6 @@ void setup() {
     delay(500);
     Serial.print(".");
     attempts++;
-    
-    // Update connecting animation every second
-    if (attempts % 2 == 0) {
-      String dots = "";
-      int dotCount = (attempts/2) % 4;
-      for (int i = 0; i < dotCount; i++) {
-        dots += ".";
-      }
-      updateBootStatus("WIFI", "Connecting" + dots, TFT_YELLOW, false);
-    }
   }
   
   if (WiFi.status() == WL_CONNECTED) {
@@ -173,8 +154,12 @@ void setup() {
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
     
-    updateBootStatus("WIFI", "Connected", TFT_GREEN, true);
-    updateBootIP(WiFi.localIP().toString());
+    tft.setCursor(10, 70);
+    tft.println("WiFi: Connected");
+    tft.setCursor(10, 100);
+    tft.setTextSize(1);
+    tft.println("IP: " + WiFi.localIP().toString());
+    tft.setTextSize(2);
     
     // Initialize UDP
     udp.begin(UDP_PORT);
@@ -187,29 +172,31 @@ void setup() {
     }
     
     // Initialize OTA updates
-    setupOTA();
-    
-    // Initialize OTA web server
-    setupOTAWebServer();
+    // setupOTA(); // Temporarily commented out for now
     
     // Set built-in LED to green when connected
     setBuiltinLED(0, 255, 0);
   } else {
     Serial.println("\nFailed to connect to WiFi");
-    updateBootStatus("WIFI", "Failed", TFT_RED, false);
+    tft.setCursor(10, 70);
+    tft.setTextColor(TFT_RED);
+    tft.println("WiFi: Failed");
     
     // Set built-in LED to red when failed
     setBuiltinLED(255, 0, 0);
   }
   
   // Initialize SD Card
-  updateBootStatus("SD", "Initializing...", TFT_YELLOW, false);
+  tft.setCursor(10, 130);
+  tft.setTextColor(TFT_WHITE);
+  tft.println("Initializing SD...");
   
   SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
   if (SD.begin(SD_CS)) {
     sdCardInitialized = true;
     Serial.println("SD card initialized successfully!");
-    updateBootStatus("SD", "Ready", TFT_GREEN, true);
+    tft.setCursor(10, 160);
+    tft.println("SD Card: OK");
     
     // Create videos directory if it doesn't exist
     if (!SD.exists(videoDirectory)) {
@@ -221,14 +208,13 @@ void setup() {
     listVideos();
   } else {
     Serial.println("SD card initialization failed!");
-    updateBootStatus("SD", "Failed", TFT_RED, false);
+    tft.setCursor(10, 70);
+    tft.setTextColor(TFT_RED);
+    tft.println("SD Card: FAIL");
+    tft.setTextColor(TFT_WHITE);
   }
   
-  // Show system ready
-  updateBootStatus("SYS", "Ready", TFT_GREEN, true);
-  showBootComplete();
-  
-  delay(2000); // Show status briefly
+  delay(1000); // Show status briefly
   
   // Set initial LED state
   fill_solid(leds, NUM_LEDS, CRGB::Green);
@@ -241,8 +227,8 @@ void loop() {
   // Handle OTA updates
   ArduinoOTA.handle();
   
-  // Handle OTA web server
-  otaServer.handleClient();
+  // Handle OTA web server - commented out for now
+  // otaServer.handleClient();
   
   // Handle UDP commands
   handleUDPCommands();
@@ -328,13 +314,10 @@ void handleUDPCommands() {
         sendResponse(commandId, "LED brightness set");
       }
       else if (action == "set_builtin_led") {
-        unsigned long cmdStart = millis();
         int r = doc["parameters"]["r"];
         int g = doc["parameters"]["g"];
         int b = doc["parameters"]["b"];
         setBuiltinLED(r, g, b);
-        unsigned long cmdEnd = millis();
-        Serial.printf("⚡ LED command processed in %dms\n", cmdEnd - cmdStart);
         sendResponse(commandId, "Built-in LED color set");
       }
       else if (action == "play_video") {
@@ -360,6 +343,19 @@ void handleUDPCommands() {
           listVideos(); // Still print to serial for debugging
           String videoList = getVideoList();
           sendResponse(commandId, videoList);
+        } else {
+          sendResponse(commandId, "SD card not available");
+        }
+      }
+      else if (action == "display_image") {
+        String filename = doc["parameters"]["filename"];
+        
+        if (sdCardInitialized) {
+          if (displayStaticImage(filename)) {
+            sendResponse(commandId, "Image displayed: " + filename);
+          } else {
+            sendResponse(commandId, "Failed to display image: " + filename);
+          }
         } else {
           sendResponse(commandId, "SD card not available");
         }
@@ -430,177 +426,11 @@ void sendStatus(String commandId) {
 void setBuiltinLED(int r, int g, int b) {
   // Note: These LEDs are typically inverted (LOW = ON, HIGH = OFF)
   // Adjust based on your board's behavior
+  analogWrite(RGB_LED_R, 255 - r);  // Inverted PWM
+  analogWrite(RGB_LED_G, 255 - g);  // Inverted PWM  
+  analogWrite(RGB_LED_B, 255 - b);  // Inverted PWM
   
-  unsigned long startTime = millis();
-  
-  // Set all channels simultaneously for better responsiveness
-  int red_val = 255 - r;    // Inverted PWM
-  int green_val = 255 - g;  // Inverted PWM  
-  int blue_val = 255 - b;   // Inverted PWM
-  
-  // Write all channels at once to minimize delay
-  analogWrite(RGB_LED_R, red_val);
-  analogWrite(RGB_LED_G, green_val);
-  analogWrite(RGB_LED_B, blue_val);
-  
-  // Small delay to ensure PWM settles (especially important for blue channel)
-  delayMicroseconds(100);
-  
-  unsigned long endTime = millis();
-  Serial.printf("Built-in RGB LED set to R:%d G:%d B:%d (took %dms)\n", r, g, b, endTime - startTime);
-}
-
-void showModernBootScreen() {
-  tft.fillScreen(TFT_BLACK);
-  
-  // Draw header bar with gradient effect
-  tft.fillRect(0, 0, 240, 35, TFT_NAVY);
-  tft.fillRect(0, 0, 240, 2, TFT_BLUE);
-  tft.fillRect(0, 33, 240, 2, TFT_DARKGREY);
-  
-  // Use larger built-in font for the title
-  tft.setTextFont(4); // Use font 4 (larger, more modern looking)
-  tft.setTextColor(TFT_WHITE);
-  tft.setCursor(15, 8);
-  tft.println("TRICORDER");
-  
-  // Add version/model info in smaller font
-  tft.setTextFont(2);
-  tft.setTextColor(TFT_CYAN);
-  tft.setCursor(155, 10);
-  tft.println("MK-VII");
-  
-  // Add ALPHA VERSION badge
-  tft.setTextFont(1);
-  tft.setTextColor(TFT_RED);
-  tft.setCursor(155, 22);
-  tft.println("ALPHA VERSION");
-  
-  // Draw device info section
-  tft.setTextFont(2);
-  tft.setTextColor(TFT_GREENYELLOW);
-  tft.setCursor(10, 45);
-  tft.println("DEVICE INFO");
-  
-  tft.setTextFont(1);
-  tft.setTextColor(TFT_WHITE);
-  tft.setCursor(10, 65);
-  tft.print("ID: ");
-  tft.setTextColor(TFT_CYAN);
-  tft.println(deviceId);
-  
-  tft.setTextColor(TFT_WHITE);
-  tft.setCursor(10, 75);
-  tft.print("FW: ");
-  tft.setTextColor(TFT_YELLOW);
-  tft.println(firmwareVersion);
-  
-  // Draw status panel with modern styling
-  tft.fillRect(5, 90, 230, 110, TFT_BLACK);
-  tft.drawRect(5, 90, 230, 110, TFT_DARKGREY);
-  tft.drawRect(6, 91, 228, 108, TFT_DARKGREY);
-  
-  // Modern section title
-  tft.setTextFont(2);
-  tft.setTextColor(TFT_GREENYELLOW);
-  tft.setCursor(15, 100);
-  tft.println("SYSTEM STATUS");
-  
-  // Draw separator line with style
-  tft.drawLine(15, 115, 225, 115, TFT_DARKGREY);
-  tft.drawLine(15, 116, 225, 116, TFT_BLUE);
-}
-
-void updateBootStatus(String component, String status, uint16_t color, bool checkmark) {
-  static int yPos = 125;
-  
-  if (component == "WIFI") yPos = 125;
-  else if (component == "SD") yPos = 155;
-  else if (component == "SYS") yPos = 175;
-  
-  // Clear the line (larger area to avoid overlaps)
-  tft.fillRect(15, yPos - 2, 210, 18, TFT_BLACK);
-  
-  // Draw component name with larger font
-  tft.setTextFont(2);
-  tft.setTextColor(TFT_WHITE);
-  tft.setCursor(20, yPos);
-  tft.print(component);
-  
-  // Draw colon
-  tft.print(":");
-  
-  // Draw status with regular font
-  tft.setTextFont(1);
-  tft.setTextColor(color);
-  tft.setCursor(70, yPos + 3);
-  tft.print(status);
-  
-  // Draw modern status indicators
-  if (checkmark) {
-    // Draw modern checkmark (filled circle with check)
-    tft.fillCircle(200, yPos + 6, 8, TFT_DARKGREEN);
-    tft.drawCircle(200, yPos + 6, 8, TFT_GREEN);
-    // Draw checkmark lines
-    tft.drawLine(196, yPos + 6, 198, yPos + 8, TFT_WHITE);
-    tft.drawLine(198, yPos + 8, 204, yPos + 2, TFT_WHITE);
-    tft.drawLine(196, yPos + 7, 198, yPos + 9, TFT_WHITE);
-    tft.drawLine(198, yPos + 9, 204, yPos + 3, TFT_WHITE);
-  } else if (color == TFT_RED) {
-    // Draw modern X (filled circle with X)
-    tft.fillCircle(200, yPos + 6, 8, TFT_MAROON);
-    tft.drawCircle(200, yPos + 6, 8, TFT_RED);
-    // Draw X lines
-    tft.drawLine(196, yPos + 2, 204, yPos + 10, TFT_WHITE);
-    tft.drawLine(204, yPos + 2, 196, yPos + 10, TFT_WHITE);
-    tft.drawLine(196, yPos + 3, 204, yPos + 11, TFT_WHITE);
-    tft.drawLine(204, yPos + 3, 196, yPos + 11, TFT_WHITE);
-  } else if (color == TFT_YELLOW) {
-    // Draw loading indicator (spinning circle)
-    tft.drawCircle(200, yPos + 6, 6, TFT_YELLOW);
-    tft.drawCircle(200, yPos + 6, 5, TFT_ORANGE);
-  }
-}
-
-void updateBootIP(String ipAddress) {
-  // Clear the IP line area (below WiFi status, with proper spacing)
-  tft.fillRect(15, 140, 210, 12, TFT_BLACK);
-  
-  tft.setTextFont(1);
-  tft.setTextColor(TFT_CYAN);
-  tft.setCursor(25, 143);
-  tft.print("IP: ");
-  tft.setTextColor(TFT_WHITE);
-  tft.print(ipAddress);
-}
-
-void showBootComplete() {
-  // Draw modern completion panel
-  tft.fillRect(5, 210, 230, 50, TFT_DARKGREEN);
-  tft.drawRect(5, 210, 230, 50, TFT_GREEN);
-  tft.drawRect(6, 211, 228, 48, TFT_GREENYELLOW);
-  
-  // Add corner styling
-  tft.drawLine(5, 210, 10, 210, TFT_GREENYELLOW);
-  tft.drawLine(5, 210, 5, 215, TFT_GREENYELLOW);
-  tft.drawLine(230, 210, 235, 210, TFT_GREENYELLOW);
-  tft.drawLine(235, 210, 235, 215, TFT_GREENYELLOW);
-  
-  tft.setTextFont(2);
-  tft.setTextColor(TFT_WHITE);
-  tft.setCursor(15, 225);
-  tft.println("SYSTEM READY");
-  
-  tft.setTextFont(1);
-  tft.setTextColor(TFT_GREENYELLOW);
-  tft.setCursor(15, 245);
-  tft.println("Awaiting commands...");
-  
-  // Add alpha version badge in bottom right
-  tft.setTextFont(1);
-  tft.setTextColor(TFT_RED);
-  tft.setCursor(170, 245);
-  tft.println("ALPHA v0.1");
+  Serial.printf("Built-in RGB LED set to R:%d G:%d B:%d\n", r, g, b);
 }
 
 bool playVideo(String filename, bool loop) {
@@ -1097,8 +927,199 @@ String getVideoList() {
   return videoList;
 }
 
-// OTA Setup Functions
+bool displayStaticImage(String filename) {
+  if (!sdCardInitialized) {
+    Serial.println("SD card not initialized");
+    return false;
+  }
+  
+  // Stop any current video playback
+  stopVideo();
+  
+  // Try to find the exact filename first
+  String fullPath = "/" + filename;
+  
+  // Check if file exists with the exact name
+  if (!SD.exists(fullPath)) {
+    Serial.printf("File not found with exact name: %s\n", fullPath.c_str());
+    // Try with common JPEG extensions
+    String extensions[] = {".jpg", ".JPG", ".jpeg", ".JPEG"};
+    bool found = false;
+    
+    for (int i = 0; i < 4; i++) {
+      String testPath = "/" + filename + extensions[i];
+      Serial.printf("Trying: %s\n", testPath.c_str());
+      if (SD.exists(testPath)) {
+        fullPath = testPath;
+        found = true;
+        Serial.printf("Found file: %s\n", fullPath.c_str());
+        break;
+      }
+      
+      // Also try removing extension if it already has one
+      int dotPos = filename.lastIndexOf(".");
+      if (dotPos > 0) {
+        String baseName = filename.substring(0, dotPos);
+        testPath = "/" + baseName + extensions[i];
+        Serial.printf("Trying (base): %s\n", testPath.c_str());
+        if (SD.exists(testPath)) {
+          fullPath = testPath;
+          found = true;
+          Serial.printf("Found file (base): %s\n", fullPath.c_str());
+          break;
+        }
+      }
+    }
+    
+    if (!found) {
+      Serial.printf("JPEG image file not found: %s\n", filename.c_str());
+      return false;
+    }
+  } else {
+    Serial.printf("Found file with exact name: %s\n", fullPath.c_str());
+  }
+  
+  Serial.printf("Displaying static image: %s\n", fullPath.c_str());
+  
+  // Clear the screen
+  tft.fillScreen(TFT_BLACK);
+  
+  // Open the file
+  File imageFile = SD.open(fullPath, FILE_READ);
+  if (!imageFile) {
+    Serial.printf("Failed to open image file: %s\n", fullPath.c_str());
+    return false;
+  }
+  
+  // Read the entire file into buffer
+  size_t fileSize = imageFile.size();
+  if (fileSize > VIDEO_BUFFER_SIZE) {
+    Serial.printf("Image file too large: %d bytes (max %d)\n", fileSize, VIDEO_BUFFER_SIZE);
+    imageFile.close();
+    return false;
+  }
+  
+  size_t bytesRead = imageFile.read(videoBuffer, fileSize);
+  imageFile.close();
+  
+  if (bytesRead == 0) {
+    Serial.println("No bytes read from image file");
+    return false;
+  }
+  
+  // Decode JPEG
+  Serial.printf("Attempting to decode JPEG: %s (%d bytes)\n", fullPath.c_str(), fileSize);
+  if (jpeg.openRAM(videoBuffer, bytesRead, JPEGDraw)) {
+    jpeg.setPixelType(RGB565_BIG_ENDIAN);
+    Serial.println("JPEG opened successfully, attempting decode...");
+    if (jpeg.decode(0, 0, 0)) {
+      Serial.println("JPEG decoded successfully");
+      jpeg.close();
+      return true;
+    } else {
+      Serial.println("JPEG decode failed");
+    }
+    jpeg.close();
+  } else {
+    Serial.println("JPEG open failed");
+  }
+  
+  return false;
+}
+
 void setupOTA() {
+  ArduinoOTA.setHostname(deviceId.c_str());
+  
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_SPIFFS
+      type = "filesystem";
+    }
+    
+    // Display OTA status on screen
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_YELLOW);
+    tft.setTextSize(2);
+    tft.setCursor(10, 10);
+    tft.println("OTA Update");
+    tft.setCursor(10, 40);
+    tft.println("Starting...");
+    
+    setBuiltinLED(255, 165, 0);  // Orange during update
+    
+    Serial.println("Start updating " + type);
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    tft.setCursor(10, 70);
+    tft.setTextColor(TFT_GREEN);
+    tft.println("Complete!");
+    tft.setCursor(10, 100);
+    tft.println("Rebooting...");
+    
+    setBuiltinLED(0, 255, 0);  // Green when complete
+    
+    Serial.println("\nEnd");
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    static unsigned int lastPercent = 101;
+    unsigned int percent = (progress / (total / 100));
+    
+    if (percent != lastPercent && percent % 10 == 0) {
+      tft.fillRect(10, 100, 300, 30, TFT_BLACK);
+      tft.setCursor(10, 100);
+      tft.setTextColor(TFT_CYAN);
+      tft.printf("Progress: %u%%\n", percent);
+      lastPercent = percent;
+    }
+    
+    Serial.printf("Progress: %u%%\r", percent);
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    tft.fillScreen(TFT_RED);
+    tft.setTextColor(TFT_WHITE);
+    tft.setCursor(10, 10);
+    tft.println("OTA Error!");
+    
+    setBuiltinLED(255, 0, 0);  // Red for error
+    
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+      tft.setCursor(10, 40);
+      tft.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+      tft.setCursor(10, 40);
+      tft.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+      tft.setCursor(10, 40);
+      tft.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+      tft.setCursor(10, 40);
+      tft.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+      tft.setCursor(10, 40);
+      tft.println("End Failed");
+    }
+    
+    delay(5000);
+    ESP.restart();
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("OTA Ready");
+}
+
+/*
+/*
   ArduinoOTA.setHostname(deviceId.c_str());
   ArduinoOTA.setPassword("tricorder123");  // Set OTA password
   
@@ -1187,6 +1208,7 @@ void setupOTA() {
   Serial.println("OTA Ready");
 }
 
+/*
 void setupOTAWebServer() {
   // Handle firmware upload via web interface
   otaServer.on("/", HTTP_GET, []() {
@@ -1283,3 +1305,4 @@ void setupOTAWebServer() {
   otaServer.begin();
   Serial.println("OTA Web Server started on port 80");
 }
+*/

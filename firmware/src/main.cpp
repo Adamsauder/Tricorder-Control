@@ -35,7 +35,7 @@
 
 // Video playback settings
 #define FRAME_DELAY_MS 33  // ~30 FPS (1000ms / 30)
-#define VIDEO_BUFFER_SIZE 32768  // 32KB buffer for larger image files
+#define VIDEO_BUFFER_SIZE 65536  // 64KB buffer - reduced from 128KB due to ESP32 memory constraints
 
 // Network configuration
 const char* WIFI_SSID = "Rigging Electric";
@@ -56,6 +56,7 @@ JPEGDEC jpeg;
 // Video playback objects
 File videoFile;
 uint8_t* videoBuffer;
+size_t videoBufferSize = 0;  // Actual allocated buffer size
 
 // State variables
 bool wifiConnected = false;
@@ -94,16 +95,47 @@ bool listVideos();
 String getVideoList();
 void showVideoFrame();
 bool displayStaticImage(String filename);
+bool displayBootImage(String filename);
 
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting Tricorder Control System...");
   
-  // Allocate video buffer
-  videoBuffer = (uint8_t*)malloc(VIDEO_BUFFER_SIZE);
-  if (!videoBuffer) {
-    Serial.println("Failed to allocate video buffer!");
+  // Allocate video buffer with fallback sizes
+  Serial.printf("Free heap before buffer allocation: %d bytes\n", ESP.getFreeHeap());
+  
+  // Try different buffer sizes in order of preference
+  size_t bufferSizes[] = {VIDEO_BUFFER_SIZE, 32768, 16384, 8192}; // 64KB, 32KB, 16KB, 8KB
+  size_t actualBufferSize = 0;
+  
+  for (int i = 0; i < 4; i++) {
+    videoBuffer = (uint8_t*)malloc(bufferSizes[i]);
+    if (videoBuffer) {
+      actualBufferSize = bufferSizes[i];
+      videoBufferSize = actualBufferSize;  // Store globally
+      Serial.printf("Successfully allocated %d bytes for video buffer\n", actualBufferSize);
+      break;
+    } else {
+      Serial.printf("Failed to allocate %d bytes, trying smaller size...\n", bufferSizes[i]);
+    }
   }
+  
+  if (!videoBuffer) {
+    Serial.println("CRITICAL: Failed to allocate any video buffer!");
+    // Try one more time with a very small buffer
+    videoBuffer = (uint8_t*)malloc(4096); // 4KB emergency buffer
+    if (videoBuffer) {
+      actualBufferSize = 4096;
+      videoBufferSize = actualBufferSize;  // Store globally
+      Serial.println("Emergency 4KB buffer allocated");
+    } else {
+      Serial.println("FATAL: Cannot allocate even 4KB buffer - system may be unstable");
+      videoBufferSize = 0;
+    }
+  }
+  
+  Serial.printf("Final buffer size: %d bytes\n", actualBufferSize);
+  Serial.printf("Free heap after buffer allocation: %d bytes\n", ESP.getFreeHeap());
   
   // Initialize LEDs
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
@@ -128,15 +160,42 @@ void setup() {
   ledcAttachPin(TFT_BL, 0);
   ledcWrite(0, 255); // Full brightness
   
-  tft.fillScreen(TFT_BLACK);
+  // Load and display boot background image
+  bool bootImageLoaded = false;
+  if (SD.begin(SD_CS)) {
+    bootImageLoaded = displayBootImage("/boot.jpg");
+    if (!bootImageLoaded) {
+      // Try alternative locations
+      bootImageLoaded = displayBootImage("/videos/boot.jpg");
+    }
+  }
+  
+  if (!bootImageLoaded) {
+    // Fallback to black background if boot image not found
+    tft.fillScreen(TFT_BLACK);
+  }
+  
+  // Set text properties for LCARS-style display
   tft.setTextColor(TFT_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(10, 10);
-  tft.println("Tricorder Booting...");
+  tft.setTextSize(1);  // Smaller text to fit in the center box
+  
+  // Position text in the center rectangular area (approximate coordinates)
+  int textX = 50;      // Left margin for center box
+  int textY = 70;      // Top of center box area (moved up 30 pixels)
+  int lineHeight = 12; // Line spacing for size 1 text
+  int currentLine = 0;
+  
+  tft.setCursor(textX, textY + (currentLine * lineHeight));
+  tft.println("TRICORDER CONTROL SYSTEM");
+  currentLine += 2;
+  
+  tft.setCursor(textX, textY + (currentLine * lineHeight));
+  tft.println("Initializing...");
   
   // Initialize WiFi
-  tft.setCursor(10, 40);
-  tft.println("Connecting WiFi...");
+  currentLine += 2;
+  tft.setCursor(textX, textY + (currentLine * lineHeight));
+  tft.println("Connecting to WiFi...");
   
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -145,6 +204,16 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED && attempts < 40) { // 20 second timeout
     delay(500);
     Serial.print(".");
+    
+    // Show connection progress
+    if (attempts % 4 == 0) {  // Update every 2 seconds
+      tft.setCursor(textX, textY + (currentLine * lineHeight));
+      tft.print("Connecting");
+      for (int i = 0; i < (attempts / 4) % 4; i++) {
+        tft.print(".");
+      }
+      tft.println("    "); // Clear any remaining characters
+    }
     attempts++;
   }
   
@@ -154,12 +223,13 @@ void setup() {
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
     
-    tft.setCursor(10, 70);
+    currentLine++;
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
     tft.println("WiFi: Connected");
-    tft.setCursor(10, 100);
-    tft.setTextSize(1);
-    tft.println("IP: " + WiFi.localIP().toString());
-    tft.setTextSize(2);
+    currentLine++;
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
+    tft.print("IP: ");
+    tft.println(WiFi.localIP().toString());
     
     // Initialize UDP
     udp.begin(UDP_PORT);
@@ -178,25 +248,85 @@ void setup() {
     setBuiltinLED(0, 255, 0);
   } else {
     Serial.println("\nFailed to connect to WiFi");
-    tft.setCursor(10, 70);
+    currentLine++;
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
     tft.setTextColor(TFT_RED);
-    tft.println("WiFi: Failed");
+    tft.println("WiFi: Connection Failed");
+    tft.setTextColor(TFT_WHITE);
     
     // Set built-in LED to red when failed
     setBuiltinLED(255, 0, 0);
   }
   
-  // Initialize SD Card
-  tft.setCursor(10, 130);
-  tft.setTextColor(TFT_WHITE);
-  tft.println("Initializing SD...");
+  // Initialize SD Card (if not already done for boot image)
+  currentLine += 2;
+  tft.setCursor(textX, textY + (currentLine * lineHeight));
+  tft.println("Initializing SD Card...");
   
-  SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
-  if (SD.begin(SD_CS)) {
+  bool sdAlreadyInitialized = SD.begin(SD_CS); // This will return true if already initialized
+  if (sdAlreadyInitialized || SD.begin(SD_CS)) {
     sdCardInitialized = true;
     Serial.println("SD card initialized successfully!");
-    tft.setCursor(10, 160);
+    
+    currentLine++;
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
     tft.println("SD Card: OK");
+    
+    // Perform SD card health checks (but don't display them on screen to save space)
+    Serial.println("=== SD Card Health Check ===");
+    
+    // Get card type
+    uint8_t cardType = SD.cardType();
+    Serial.printf("SD Card Type: ");
+    if (cardType == CARD_NONE) {
+      Serial.println("No SD card attached");
+    } else if (cardType == CARD_MMC) {
+      Serial.println("MMC");
+    } else if (cardType == CARD_SD) {
+      Serial.println("SDSC");
+    } else if (cardType == CARD_SDHC) {
+      Serial.println("SDHC");
+    } else {
+      Serial.println("Unknown");
+    }
+    
+    // Get card size
+    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+    Serial.printf("SD Card Size: %lluMB\n", cardSize);
+    
+    // Get used/total space
+    size_t totalBytes = SD.totalBytes();
+    size_t usedBytes = SD.usedBytes();
+    Serial.printf("Total space: %d bytes\n", totalBytes);
+    Serial.printf("Used space: %d bytes\n", usedBytes);
+    Serial.printf("Free space: %d bytes\n", totalBytes - usedBytes);
+    
+    // Test basic file operations
+    Serial.println("Testing basic file operations...");
+    File testFile = SD.open("/sd_test.txt", FILE_WRITE);
+    if (testFile) {
+      testFile.println("SD card test write");
+      testFile.close();
+      Serial.println("Test write: SUCCESS");
+      
+      // Test read back
+      testFile = SD.open("/sd_test.txt", FILE_READ);
+      if (testFile) {
+        String testContent = testFile.readString();
+        testFile.close();
+        Serial.printf("Test read: SUCCESS - content: '%s'\n", testContent.c_str());
+        
+        // Clean up test file
+        SD.remove("/sd_test.txt");
+        Serial.println("Test file cleanup: SUCCESS");
+      } else {
+        Serial.println("Test read: FAILED");
+      }
+    } else {
+      Serial.println("Test write: FAILED");
+    }
+    
+    Serial.println("=== End SD Card Health Check ===");
     
     // Create videos directory if it doesn't exist
     if (!SD.exists(videoDirectory)) {
@@ -208,11 +338,19 @@ void setup() {
     listVideos();
   } else {
     Serial.println("SD card initialization failed!");
-    tft.setCursor(10, 70);
+    currentLine++;
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
     tft.setTextColor(TFT_RED);
-    tft.println("SD Card: FAIL");
+    tft.println("SD Card: FAILED");
     tft.setTextColor(TFT_WHITE);
   }
+  
+  // Show system ready message
+  currentLine += 2;
+  tft.setCursor(textX, textY + (currentLine * lineHeight));
+  tft.setTextColor(TFT_GREEN);
+  tft.println("SYSTEM READY");
+  tft.setTextColor(TFT_WHITE);
   
   delay(1000); // Show status briefly
   
@@ -358,6 +496,46 @@ void handleUDPCommands() {
           }
         } else {
           sendResponse(commandId, "SD card not available");
+        }
+      }
+      else if (action == "display_boot_screen") {
+        // Display the boot screen with startup messages
+        if (displayBootImage("/boot.jpg") || displayBootImage("/videos/boot.jpg")) {
+          // Set text properties for LCARS-style display
+          tft.setTextColor(TFT_WHITE);
+          tft.setTextSize(1);
+          
+          // Position text in the center rectangular area
+          int textX = 50;
+          int textY = 70;
+          int lineHeight = 12;
+          int currentLine = 0;
+          
+          tft.setCursor(textX, textY + (currentLine * lineHeight));
+          tft.println("TRICORDER CONTROL SYSTEM");
+          currentLine += 2;
+          
+          tft.setCursor(textX, textY + (currentLine * lineHeight));
+          tft.setTextColor(TFT_GREEN);
+          tft.println("SYSTEM READY");
+          currentLine++;
+          
+          tft.setCursor(textX, textY + (currentLine * lineHeight));
+          tft.setTextColor(TFT_WHITE);
+          tft.println("WiFi: Connected");
+          currentLine++;
+          
+          tft.setCursor(textX, textY + (currentLine * lineHeight));
+          tft.print("IP: ");
+          tft.println(WiFi.localIP().toString());
+          currentLine++;
+          
+          tft.setCursor(textX, textY + (currentLine * lineHeight));
+          tft.println("SD Card: OK");
+          
+          sendResponse(commandId, "Boot screen displayed");
+        } else {
+          sendResponse(commandId, "Failed to display boot screen");
         }
       }
       else if (action == "status") {
@@ -510,9 +688,6 @@ bool playVideo(String filename, bool loop) {
         currentFrame = 0;
         lastFrameTime = millis();
         
-        // Clear screen
-        tft.fillScreen(TFT_BLACK);
-        
         return true;
       } else {
         Serial.printf("No JPEG files found in folder: %s\n", folderPath.c_str());
@@ -597,9 +772,6 @@ bool playVideo(String filename, bool loop) {
   currentVideo = filename;
   currentFrame = 0;
   lastFrameTime = millis();
-  
-  // Clear screen
-  tft.fillScreen(TFT_BLACK);
   
   return true;
 }
@@ -716,8 +888,8 @@ void showVideoFrame() {
   
   // Read the entire JPEG file into buffer
   size_t fileSize = frameFile.size();
-  if (fileSize > VIDEO_BUFFER_SIZE) {
-    Serial.printf("Frame file too large: %d bytes (max %d)\n", fileSize, VIDEO_BUFFER_SIZE);
+  if (fileSize > videoBufferSize) {
+    Serial.printf("Frame file too large: %d bytes (max %d)\n", fileSize, videoBufferSize);
     frameFile.close();
     return;
   }
@@ -726,14 +898,27 @@ void showVideoFrame() {
   frameFile.close();
   
   if (bytesRead > 0) {
-    // Try to decode as JPEG
+    // Try to decode as JPEG with optimized settings
     if (jpeg.openRAM(videoBuffer, bytesRead, JPEGDraw)) {
-      // Set scale to fit screen
+      // Configure JPEG decoder for best quality
       jpeg.setPixelType(RGB565_BIG_ENDIAN);
       
+      // Get image dimensions
+      int width = jpeg.getWidth();
+      int height = jpeg.getHeight();
+      
+      // Calculate centering for smaller images
+      int xOffset = (width < 240) ? (240 - width) / 2 : 0;
+      int yOffset = (height < 320) ? (320 - height) / 2 : 0;
+      
+      // Clear screen only when ready to display new frame
+      if (currentFrame == 0 || isAnimatedSequence) {
+        tft.fillScreen(TFT_BLACK);
+      }
+      
       // Decode and display
-      if (jpeg.decode(0, 0, 0)) {
-        Serial.printf("SUCCESS: Displayed frame %d/%d: %s\n", currentFrame + 1, totalFrames, currentFramePath.c_str());
+      if (jpeg.decode(xOffset, yOffset, 0)) {
+        Serial.printf("SUCCESS: Displayed frame %d/%d: %s (%dx%d)\n", currentFrame + 1, totalFrames, currentFramePath.c_str(), width, height);
       } else {
         Serial.printf("ERROR: JPEG decode failed for frame %d: %s\n", currentFrame, currentFramePath.c_str());
       }
@@ -936,53 +1121,88 @@ bool displayStaticImage(String filename) {
   // Stop any current video playback
   stopVideo();
   
-  // Try to find the exact filename first
+  // Try to find the exact filename first in root directory
   String fullPath = "/" + filename;
   
-  // Check if file exists with the exact name
+  // Check if file exists with the exact name in root
   if (!SD.exists(fullPath)) {
     Serial.printf("File not found with exact name: %s\n", fullPath.c_str());
-    // Try with common JPEG extensions
-    String extensions[] = {".jpg", ".JPG", ".jpeg", ".JPEG"};
-    bool found = false;
     
-    for (int i = 0; i < 4; i++) {
-      String testPath = "/" + filename + extensions[i];
-      Serial.printf("Trying: %s\n", testPath.c_str());
-      if (SD.exists(testPath)) {
-        fullPath = testPath;
-        found = true;
-        Serial.printf("Found file: %s\n", fullPath.c_str());
-        break;
-      }
+    // Try in videos directory
+    fullPath = videoDirectory + "/" + filename;
+    if (!SD.exists(fullPath)) {
+      Serial.printf("File not found in videos directory: %s\n", fullPath.c_str());
       
-      // Also try removing extension if it already has one
-      int dotPos = filename.lastIndexOf(".");
-      if (dotPos > 0) {
-        String baseName = filename.substring(0, dotPos);
-        testPath = "/" + baseName + extensions[i];
-        Serial.printf("Trying (base): %s\n", testPath.c_str());
+      // Try with common JPEG extensions in both directories
+      String extensions[] = {".jpg", ".JPG", ".jpeg", ".JPEG"};
+      bool found = false;
+      
+      // First try root directory with extensions
+      for (int i = 0; i < 4; i++) {
+        String testPath = "/" + filename + extensions[i];
+        Serial.printf("Trying root: %s\n", testPath.c_str());
         if (SD.exists(testPath)) {
           fullPath = testPath;
           found = true;
-          Serial.printf("Found file (base): %s\n", fullPath.c_str());
+          Serial.printf("Found file in root: %s\n", fullPath.c_str());
           break;
         }
+        
+        // Also try removing extension if it already has one
+        int dotPos = filename.lastIndexOf(".");
+        if (dotPos > 0) {
+          String baseName = filename.substring(0, dotPos);
+          testPath = "/" + baseName + extensions[i];
+          Serial.printf("Trying root (base): %s\n", testPath.c_str());
+          if (SD.exists(testPath)) {
+            fullPath = testPath;
+            found = true;
+            Serial.printf("Found file in root (base): %s\n", fullPath.c_str());
+            break;
+          }
+        }
       }
-    }
-    
-    if (!found) {
-      Serial.printf("JPEG image file not found: %s\n", filename.c_str());
-      return false;
+      
+      // If not found in root, try videos directory with extensions
+      if (!found) {
+        for (int i = 0; i < 4; i++) {
+          String testPath = videoDirectory + "/" + filename + extensions[i];
+          Serial.printf("Trying videos: %s\n", testPath.c_str());
+          if (SD.exists(testPath)) {
+            fullPath = testPath;
+            found = true;
+            Serial.printf("Found file in videos: %s\n", fullPath.c_str());
+            break;
+          }
+          
+          // Also try removing extension if it already has one
+          int dotPos = filename.lastIndexOf(".");
+          if (dotPos > 0) {
+            String baseName = filename.substring(0, dotPos);
+            testPath = videoDirectory + "/" + baseName + extensions[i];
+            Serial.printf("Trying videos (base): %s\n", testPath.c_str());
+            if (SD.exists(testPath)) {
+              fullPath = testPath;
+              found = true;
+              Serial.printf("Found file in videos (base): %s\n", fullPath.c_str());
+              break;
+            }
+          }
+        }
+      }
+      
+      if (!found) {
+        Serial.printf("JPEG image file not found: %s\n", filename.c_str());
+        return false;
+      }
+    } else {
+      Serial.printf("Found file in videos directory: %s\n", fullPath.c_str());
     }
   } else {
-    Serial.printf("Found file with exact name: %s\n", fullPath.c_str());
+    Serial.printf("Found file with exact name in root: %s\n", fullPath.c_str());
   }
   
   Serial.printf("Displaying static image: %s\n", fullPath.c_str());
-  
-  // Clear the screen
-  tft.fillScreen(TFT_BLACK);
   
   // Open the file
   File imageFile = SD.open(fullPath, FILE_READ);
@@ -991,28 +1211,110 @@ bool displayStaticImage(String filename) {
     return false;
   }
   
-  // Read the entire file into buffer
+  // Get file size first
   size_t fileSize = imageFile.size();
-  if (fileSize > VIDEO_BUFFER_SIZE) {
-    Serial.printf("Image file too large: %d bytes (max %d)\n", fileSize, VIDEO_BUFFER_SIZE);
+  Serial.printf("File opened successfully, size: %d bytes\n", fileSize);
+  
+  if (fileSize == 0) {
+    Serial.println("ERROR: File is empty (0 bytes)");
     imageFile.close();
     return false;
   }
   
-  size_t bytesRead = imageFile.read(videoBuffer, fileSize);
-  imageFile.close();
-  
-  if (bytesRead == 0) {
-    Serial.println("No bytes read from image file");
+  if (fileSize > videoBufferSize) {
+    Serial.printf("Image file too large: %d bytes (max %d)\n", fileSize, videoBufferSize);
+    imageFile.close();
     return false;
   }
   
-  // Decode JPEG
+  // Try to read the file with enhanced diagnostics
+  Serial.printf("Attempting to read %d bytes from file...\n", fileSize);
+  
+  // Check if file is at the beginning
+  Serial.printf("File position before read: %d\n", imageFile.position());
+  
+  // Try a small test read first
+  uint8_t testByte;
+  size_t testRead = imageFile.read(&testByte, 1);
+  Serial.printf("Test read of 1 byte returned: %d bytes (value: 0x%02X)\n", testRead, testRead > 0 ? testByte : 0);
+  
+  // Reset file position
+  imageFile.seek(0);
+  Serial.printf("File position after seek(0): %d\n", imageFile.position());
+  
+  // Check if buffer is valid
+  if (!videoBuffer) {
+    Serial.println("ERROR: Video buffer is NULL!");
+    imageFile.close();
+    return false;
+  }
+  
+  // Try reading in smaller chunks to diagnose
+  size_t bytesRead = 0;
+  size_t chunkSize = min((size_t)1024, fileSize); // Read in 1KB chunks or file size if smaller
+  size_t totalBytesToRead = fileSize;
+  
+  Serial.printf("Reading file in chunks of %d bytes...\n", chunkSize);
+  
+  while (bytesRead < totalBytesToRead) {
+    size_t remainingBytes = totalBytesToRead - bytesRead;
+    size_t currentChunkSize = min(chunkSize, remainingBytes);
+    
+    Serial.printf("Attempting to read chunk: %d bytes at offset %d\n", currentChunkSize, bytesRead);
+    size_t chunkBytesRead = imageFile.read(videoBuffer + bytesRead, currentChunkSize);
+    Serial.printf("Chunk read result: %d bytes\n", chunkBytesRead);
+    
+    if (chunkBytesRead == 0) {
+      Serial.printf("Read failed at offset %d - SD card or file corruption?\n", bytesRead);
+      break;
+    }
+    
+    bytesRead += chunkBytesRead;
+    
+    if (chunkBytesRead < currentChunkSize) {
+      Serial.printf("Partial chunk read: got %d, expected %d\n", chunkBytesRead, currentChunkSize);
+      break;
+    }
+  }
+  
+  imageFile.close();
+  
+  Serial.printf("Final read result: %d bytes from file (expected %d)\n", bytesRead, fileSize);
+  
+  if (bytesRead == 0) {
+    Serial.println("ERROR: No bytes read from image file");
+    Serial.println("Possible causes:");
+    Serial.println("  1. SD card hardware failure");
+    Serial.println("  2. File system corruption");
+    Serial.println("  3. Insufficient power to SD card");
+    Serial.println("  4. Bad SD card connection");
+    return false;
+  }
+  
+  if (bytesRead != fileSize) {
+    Serial.printf("WARNING: Partial read - got %d bytes, expected %d bytes\n", bytesRead, fileSize);
+  }
+  
+  // Decode JPEG with optimized settings
   Serial.printf("Attempting to decode JPEG: %s (%d bytes)\n", fullPath.c_str(), fileSize);
   if (jpeg.openRAM(videoBuffer, bytesRead, JPEGDraw)) {
+    // Configure JPEG decoder for best quality
     jpeg.setPixelType(RGB565_BIG_ENDIAN);
+    
+    // Get image dimensions
+    int width = jpeg.getWidth();
+    int height = jpeg.getHeight();
+    Serial.printf("JPEG dimensions: %dx%d\n", width, height);
+    
+    // Calculate centering for smaller images
+    int xOffset = (width < 240) ? (240 - width) / 2 : 0;
+    int yOffset = (height < 320) ? (320 - height) / 2 : 0;
+    
+    // Clear the screen only when we're ready to display the new image
+    tft.fillScreen(TFT_BLACK);
+    
     Serial.println("JPEG opened successfully, attempting decode...");
-    if (jpeg.decode(0, 0, 0)) {
+    if (jpeg.decode(xOffset, yOffset, 0)) {
       Serial.println("JPEG decoded successfully");
       jpeg.close();
       return true;
@@ -1022,6 +1324,111 @@ bool displayStaticImage(String filename) {
     jpeg.close();
   } else {
     Serial.println("JPEG open failed");
+  }
+  
+  return false;
+}
+
+bool displayBootImage(String filename) {
+  // Initialize SPI and SD card for boot image
+  SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+  if (!SD.begin(SD_CS)) {
+    Serial.println("SD card not available for boot image");
+    return false;
+  }
+  
+  // Check if file exists
+  if (!SD.exists(filename)) {
+    Serial.printf("Boot image not found: %s\n", filename.c_str());
+    return false;
+  }
+  
+  Serial.printf("Loading boot image: %s\n", filename.c_str());
+  
+  // Open the file
+  File imageFile = SD.open(filename, FILE_READ);
+  if (!imageFile) {
+    Serial.printf("Failed to open boot image: %s\n", filename.c_str());
+    return false;
+  }
+  
+  // Get file size
+  size_t fileSize = imageFile.size();
+  Serial.printf("Boot image size: %d bytes\n", fileSize);
+  
+  if (fileSize == 0) {
+    Serial.println("Boot image is empty");
+    imageFile.close();
+    return false;
+  }
+  
+  if (fileSize > videoBufferSize) {
+    Serial.printf("Boot image too large: %d bytes (max %d)\n", fileSize, videoBufferSize);
+    imageFile.close();
+    return false;
+  }
+  
+  // Check if buffer is allocated
+  if (!videoBuffer) {
+    Serial.println("Video buffer not available for boot image");
+    imageFile.close();
+    return false;
+  }
+  
+  // Read the image file in chunks
+  size_t bytesRead = 0;
+  size_t chunkSize = min((size_t)1024, fileSize);
+  
+  while (bytesRead < fileSize) {
+    size_t remainingBytes = fileSize - bytesRead;
+    size_t currentChunkSize = min(chunkSize, remainingBytes);
+    
+    size_t chunkBytesRead = imageFile.read(videoBuffer + bytesRead, currentChunkSize);
+    
+    if (chunkBytesRead == 0) {
+      Serial.printf("Boot image read failed at offset %d\n", bytesRead);
+      break;
+    }
+    
+    bytesRead += chunkBytesRead;
+    
+    if (chunkBytesRead < currentChunkSize) {
+      break;
+    }
+  }
+  
+  imageFile.close();
+  
+  if (bytesRead == 0) {
+    Serial.println("Failed to read boot image data");
+    return false;
+  }
+  
+  // Decode and display the JPEG - only clear screen right before displaying
+  if (jpeg.openRAM(videoBuffer, bytesRead, JPEGDraw)) {
+    jpeg.setPixelType(RGB565_BIG_ENDIAN);
+    
+    int width = jpeg.getWidth();
+    int height = jpeg.getHeight();
+    Serial.printf("Boot image dimensions: %dx%d\n", width, height);
+    
+    // Calculate centering
+    int xOffset = (width < 240) ? (240 - width) / 2 : 0;
+    int yOffset = (height < 320) ? (320 - height) / 2 : 0;
+    
+    // Clear the screen only when we're ready to display the new image
+    tft.fillScreen(TFT_BLACK);
+    
+    if (jpeg.decode(xOffset, yOffset, 0)) {
+      Serial.println("Boot image displayed successfully");
+      jpeg.close();
+      return true;
+    } else {
+      Serial.println("Boot image JPEG decode failed");
+    }
+    jpeg.close();
+  } else {
+    Serial.println("Boot image JPEG open failed");
   }
   
   return false;

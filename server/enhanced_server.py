@@ -336,9 +336,10 @@ def index():
                         ${device.video_playing ? `<p><strong>Video:</strong> ${device.current_video || 'Playing'} ${device.video_looping ? '(Looping)' : ''}</p>` : ''}
                         <div style="margin-top: 10px;">
                             <strong>📺 Image Controls:</strong><br>
-                            <button onclick="sendCommand('${device.device_id}', 'play_video', 'startup.jpg')">Play Startup</button>
+                            <button onclick="sendBootScreen('${device.device_id}')">Play Startup</button>
                             <button onclick="sendImageCommand('${device.device_id}', 'greenscreen.jpg')" style="background: #00ff00; color: black; margin: 2px;">🟩 Green Screen</button>
                             <button onclick="sendImageCommand('${device.device_id}', 'test.jpg')" style="background: #ffcc00; color: black; margin: 2px;">📺 Test Card</button>
+                            <button onclick="sendImageCommand('${device.device_id}', 'test2.jpg')" style="background: #ff6600; color: white; margin: 2px;">📺 Test2</button>
                             <br><br>
                             <strong>💡 LED Controls:</strong><br>
                             <button onclick="sendLEDColor('${device.device_id}', 255, 0, 0)" style="background: #ff4444; margin: 2px;">🔴 Red</button>
@@ -378,6 +379,18 @@ def index():
                         parameters: {
                             filename: filename
                         }
+                    })
+                });
+            }
+            
+            function sendBootScreen(deviceId) {
+                fetch('/api/command', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        device_id: deviceId,
+                        action: 'display_boot_screen',
+                        parameters: {}
                     })
                 });
             }

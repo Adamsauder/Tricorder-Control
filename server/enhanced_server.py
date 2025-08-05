@@ -27,7 +27,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 # Configuration
 CONFIG = {
     "udp_port": 8888,
-    "web_port": 5000,
+    "web_port": 8080,  # Changed to match web frontend proxy configuration
     "device_timeout": 30,  # seconds
     "command_timeout": 5,  # seconds
 }

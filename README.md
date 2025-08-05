@@ -1,7 +1,31 @@
 # Tricorder Control System
 **Version 0.1**
 
-A comprehensive control system for ESP32-based film set props with embedded screens, NeoPixel LEDs, and ## 📊 Project Status & Accomplishments
+A comprehensive control system for ESP32-based film set props with embedded screens, NeoPixel LEDs, and Over-The-Air (OTA) firmware updates.
+
+## 🎛️ **Server Options**
+
+Choose the right server for your needs:
+
+### 🌐 **Web GUI Server** (Enhanced Server)
+**Perfect for**: Interactive device management, real-time monitoring, firmware updates
+- **Start**: `start_enhanced_server.bat` or `start_enhanced_server.ps1`
+- **Features**: Web dashboard, device simulator, OTA updates, real-time status
+- **Access**: http://localhost:5000
+
+### �️ **GUI Desktop Server** (NEW!)
+**Perfect for**: Visual desktop control, drag-and-drop ease, always-visible dashboard
+- **Start**: `start_gui_server.bat` or `start_gui_server.ps1`
+- **Features**: Native desktop app, LED color buttons, real-time monitoring, device details
+- **Interface**: Native Windows application with dark theme
+
+### �💻 **Standalone Server** 
+**Perfect for**: Automation, scripting, headless operation, service deployment
+- **Start**: `start_standalone_server.bat` or `start_standalone_server.ps1`
+- **Features**: Command-line interface, automatic discovery, background operation
+- **Documentation**: [Standalone Server Guide](server/STANDALONE_SERVER_README.md)
+
+## 📊 Project Status & Accomplishments
 
 ### ✅ **COMPLETED FEATURES**
 
@@ -36,6 +60,18 @@ A comprehensive control system for ESP32-based film set props with embedded scre
 - ✅ Device health monitoring (battery, temperature, status)
 - ✅ WiFi connectivity with automatic reconnection
 - ✅ Real-time status updates and error reporting
+
+#### 💻 **Standalone & GUI Servers (NEW v0.1 Features!)**
+- ✅ **Command-Line Interface**: Full device control through terminal
+- ✅ **GUI Desktop Application**: Native Windows app with visual controls
+- ✅ **LED Color Buttons**: Visual LED control with instant color selection  
+- ✅ **Real-time Dashboard**: Live device monitoring and status updates
+- ✅ **Automatic Discovery**: Background network scanning for devices
+- ✅ **Service Mode**: Runs as Windows service or Linux daemon
+- ✅ **Comprehensive Logging**: Detailed activity logs with rotation
+- ✅ **Statistics & History**: Command tracking and performance metrics
+- ✅ **Broadcast Commands**: Send commands to all devices simultaneously
+- ✅ **Background Operation**: Headless operation for automation scripts
 
 ### 🚧 **READY FOR DEPLOYMENT**
 - 🟡 **Hardware Testing**: ESP32 firmware ready for physical device testing

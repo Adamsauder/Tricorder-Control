@@ -25,6 +25,9 @@ import {
   Menu,
   ListItemIcon,
   ListItemText,
+  Checkbox,
+  Alert,
+  Snackbar,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -44,28 +47,43 @@ import {
   WifiOff as WifiOffIcon,
   Error as ErrorIcon,
   Update as UpdateIcon,
+  Palette as PaletteIcon,
+  Brightness6 as BrightnessIcon,
+  SelectAll as SelectAllIcon,
+  DeselectAll as DeselectIcon,
 } from '@mui/icons-material';
 import TricorderSettingsModal from './TricorderSettingsModal';
 import FirmwareUpdateModal from './FirmwareUpdateModal';
-
-interface TricorderDevice {
-  device_id: string;
-  status: 'online' | 'offline' | 'error';
-  battery: number;
-  video_playing: boolean;
-  location: string;
-  ip_address: string;
-  firmware_version: string;
-  last_seen: string;
-  temperature?: number;
-  current_video?: string;
-  prop_profile?: string;
-  dmx_start_address?: number;
-  dmx_universe?: number;
-}
+import { useTricorderFarm } from '../hooks/useTricorderFarm';
+import { TricorderDevice } from '../services/tricorderAPI';
 
 const TricorderFarmDashboard: React.FC = () => {
-  const [selectedDevices, setSelectedDevices] = useState<Set<string>>(new Set());
+  // Use our custom hook for farm management
+  const {
+    devices,
+    serverInfo,
+    loading,
+    error,
+    connected,
+    selectedDevices,
+    refreshDevices,
+    startDiscovery,
+    selectDevice,
+    selectAllDevices,
+    clearSelection,
+    toggleDeviceSelection,
+    setLEDColor,
+    setLEDBrightness,
+    setBuiltinLED,
+    playVideo,
+    stopVideo,
+    displayImage,
+    displayBootScreen,
+    pingDevices,
+    getDeviceStatus,
+  } = useTricorderFarm();
+
+  // Local state for UI
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [locationFilter, setLocationFilter] = useState<string>('all');
@@ -74,105 +92,98 @@ const TricorderFarmDashboard: React.FC = () => {
   const [selectedDevice, setSelectedDevice] = useState<TricorderDevice | null>(null);
   const [firmwareUpdateOpen, setFirmwareUpdateOpen] = useState(false);
   const [updateDevice, setUpdateDevice] = useState<TricorderDevice | null>(null);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
 
-  const mockTricorders: TricorderDevice[] = [
-    { 
-      device_id: 'TRICORDER_001', 
-      status: 'online', 
-      battery: 85, 
-      video_playing: true, 
-      location: 'Set A - Bridge',
-      ip_address: '192.168.1.100',
-      firmware_version: '1.2.3',
-      last_seen: '2024-01-15T10:30:00Z',
-      temperature: 24.5,
-      current_video: 'bridge_scan.mp4',
-      prop_profile: 'tricorder_mk1',
-      dmx_start_address: 1,
-      dmx_universe: 1
-    },
-    { 
-      device_id: 'TRICORDER_002', 
-      status: 'offline', 
-      battery: 42, 
-      video_playing: false, 
-      location: 'Set B - Engineering',
-      ip_address: '192.168.1.101',
-      firmware_version: '1.2.3',
-      last_seen: '2024-01-15T09:45:00Z',
-      temperature: 28.2,
-      prop_profile: 'tricorder_mk2',
-      dmx_start_address: 16,
-      dmx_universe: 1
-    },
-    { 
-      device_id: 'TRICORDER_003', 
-      status: 'online', 
-      battery: 95, 
-      video_playing: true, 
-      location: 'Set C - Sick Bay',
-      ip_address: '192.168.1.102',
-      firmware_version: '1.2.3',
-      last_seen: '2024-01-15T10:32:00Z',
-      temperature: 22.1,
-      current_video: 'medical_readout.mp4',
-      prop_profile: 'tricorder_mk1',
-      dmx_start_address: 32,
-      dmx_universe: 1
-    },
-    { 
-      device_id: 'TRICORDER_004', 
-      status: 'error', 
-      battery: 12, 
-      video_playing: false, 
-      location: 'Set D - Ready Room',
-      ip_address: '192.168.1.103',
-      firmware_version: '1.1.8',
-      last_seen: '2024-01-15T08:15:00Z',
-      temperature: 31.0,
-      prop_profile: 'communicator',
-      dmx_start_address: 48,
-      dmx_universe: 2
-    },
-    { 
-      device_id: 'TRICORDER_005', 
-      status: 'online', 
-      battery: 78, 
-      video_playing: true, 
-      location: 'Set A - Transporter',
-      ip_address: '192.168.1.104',
-      firmware_version: '1.2.3',
-      last_seen: '2024-01-15T10:29:00Z',
-      temperature: 26.7,
-      current_video: 'transport_pattern.mp4',
-      prop_profile: 'padd',
-      dmx_start_address: 64,
-      dmx_universe: 2
-    },
-    { 
-      device_id: 'TRICORDER_006', 
-      status: 'online', 
-      battery: 62, 
-      video_playing: false, 
-      location: 'Set E - Cargo Bay',
-      ip_address: '192.168.1.105',
-      firmware_version: '1.2.3',
-      last_seen: '2024-01-15T10:31:00Z',
-      temperature: 20.3,
-      prop_profile: 'tricorder_mk2',
-      dmx_start_address: 80,
-      dmx_universe: 2
-    },
-  ];
+  // Color picker state
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  const [selectedColor, setSelectedColor] = useState({ r: 255, g: 255, b: 255 });
+  const [brightness, setBrightness] = useState(128);
 
-  const toggleDeviceSelection = (deviceId: string) => {
-    const newSelected = new Set(selectedDevices);
-    if (newSelected.has(deviceId)) {
-      newSelected.delete(deviceId);
+  // Helper functions
+  const showSnackbar = (message: string) => {
+    setSnackbarMessage(message);
+    setSnackbarOpen(true);
+  };
+
+  const handleDeviceClick = (deviceId: string, event: React.MouseEvent) => {
+    if (event.ctrlKey || event.metaKey) {
+      // Multi-select with Ctrl/Cmd
+      toggleDeviceSelection(deviceId);
     } else {
-      newSelected.add(deviceId);
+      // Single select
+      selectDevice(deviceId);
     }
-    setSelectedDevices(newSelected);
+  };
+
+  const handleBulkAction = async (action: string) => {
+    const selectedIds = Array.from(selectedDevices);
+    if (selectedIds.length === 0) {
+      showSnackbar('No devices selected');
+      return;
+    }
+
+    try {
+      switch (action) {
+        case 'play_demo':
+          await playVideo(selectedIds, 'startup', false);
+          showSnackbar(`Playing demo video on ${selectedIds.length} device(s)`);
+          break;
+        case 'stop_video':
+          await stopVideo(selectedIds);
+          showSnackbar(`Stopped video on ${selectedIds.length} device(s)`);
+          break;
+        case 'set_red_led':
+          await setLEDColor(selectedIds, 255, 0, 0);
+          showSnackbar(`Set LED to red on ${selectedIds.length} device(s)`);
+          break;
+        case 'set_green_led':
+          await setLEDColor(selectedIds, 0, 255, 0);
+          showSnackbar(`Set LED to green on ${selectedIds.length} device(s)`);
+          break;
+        case 'set_blue_led':
+          await setLEDColor(selectedIds, 0, 0, 255);
+          showSnackbar(`Set LED to blue on ${selectedIds.length} device(s)`);
+          break;
+        case 'ping':
+          await pingDevices(selectedIds);
+          showSnackbar(`Pinged ${selectedIds.length} device(s)`);
+          break;
+        case 'boot_screen':
+          await displayBootScreen(selectedIds);
+          showSnackbar(`Showing boot screen on ${selectedIds.length} device(s)`);
+          break;
+        default:
+          showSnackbar(`Unknown action: ${action}`);
+      }
+    } catch (error) {
+      showSnackbar(`Error executing action: ${error}`);
+    }
+  };
+
+  // Filter devices based on search and filters
+  const filteredDevices = devices.filter(device => {
+    const matchesSearch = device.device_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         (device.location || '').toLowerCase().includes(searchQuery.toLowerCase());
+    
+    const matchesStatus = statusFilter === 'all' || device.status === statusFilter;
+    
+    const matchesLocation = locationFilter === 'all' || device.location === locationFilter;
+    
+    return matchesSearch && matchesStatus && matchesLocation;
+  });
+
+  // Get unique locations for filter
+  const locations = Array.from(new Set(devices
+    .map(d => d.location)
+    .filter(Boolean)
+  ));
+
+  const getBatteryIcon = (battery?: number) => {
+    if (!battery) return <BatteryIcon />;
+    if (battery > 75) return <BatteryIcon color="success" />;
+    if (battery > 25) return <BatteryIcon color="warning" />;
+    return <BatteryIcon color="error" />;
   };
 
   const getStatusColor = (status: string): 'success' | 'warning' | 'error' => {
@@ -191,17 +202,17 @@ const TricorderFarmDashboard: React.FC = () => {
   };
 
   // Get unique locations for filter dropdown
-  const uniqueLocations = Array.from(new Set(mockTricorders.map(d => d.location.split(' - ')[0])));
+  const uniqueLocations = Array.from(new Set(devices.map(d => d.location?.split(' - ')[0] || 'Unknown')));
 
   // Filter devices based on search and filters
-  const filteredTricorders = mockTricorders.filter(device => {
+  const filteredTricorders = devices.filter(device => {
     const matchesSearch = device.device_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         device.location.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         device.ip_address.includes(searchQuery);
+                         (device.location?.toLowerCase().includes(searchQuery.toLowerCase()) || false) ||
+                         (device.ip_address?.includes(searchQuery) || false);
     
     const matchesStatus = statusFilter === 'all' || device.status === statusFilter;
     
-    const matchesLocation = locationFilter === 'all' || device.location.startsWith(locationFilter);
+    const matchesLocation = locationFilter === 'all' || device.location?.startsWith(locationFilter);
     
     return matchesSearch && matchesStatus && matchesLocation;
   });
@@ -337,8 +348,10 @@ const TricorderFarmDashboard: React.FC = () => {
                 <Button 
                   variant="contained" 
                   startIcon={<RefreshIcon />}
+                  onClick={refreshDevices}
+                  disabled={isLoading}
                 >
-                  Refresh
+                  {isLoading ? 'Refreshing...' : 'Refresh'}
                 </Button>
               </Box>
             </Grid>
@@ -350,7 +363,7 @@ const TricorderFarmDashboard: React.FC = () => {
           {filteredTricorders.map((device) => (
             <Grid item xs={12} sm={6} lg={4} xl={3} key={device.device_id}>
               <Card
-                onClick={() => toggleDeviceSelection(device.device_id)}
+                onClick={() => toggleSelection(device.device_id)}
                 sx={{
                   cursor: 'pointer',
                   transition: 'all 0.3s ease',
@@ -383,10 +396,10 @@ const TricorderFarmDashboard: React.FC = () => {
                   {/* Network Info */}
                   <Box mb={2}>
                     <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                      IP: {device.ip_address}
+                      IP: {device.ip_address || 'Unknown'}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      FW: v{device.firmware_version}
+                      FW: v{device.firmware_version || 'Unknown'}
                     </Typography>
                   </Box>
 
@@ -394,7 +407,7 @@ const TricorderFarmDashboard: React.FC = () => {
                   <Box display="flex" alignItems="center" mb={2}>
                     <LocationIcon sx={{ color: '#666', mr: 1, fontSize: 18 }} />
                     <Typography variant="body2" color="text.secondary">
-                      {device.location}
+                      {device.location || 'Unknown Location'}
                     </Typography>
                   </Box>
 
@@ -417,31 +430,33 @@ const TricorderFarmDashboard: React.FC = () => {
                   )}
 
                   {/* Battery Status */}
-                  <Box mb={2}>
-                    <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                      <Box display="flex" alignItems="center">
-                        <BatteryIcon sx={{ color: '#666', mr: 1, fontSize: 18 }} />
-                        <Typography variant="body2" color="text.secondary">
-                          Battery
+                  {device.battery !== undefined && (
+                    <Box mb={2}>
+                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                        <Box display="flex" alignItems="center">
+                          <BatteryIcon sx={{ color: '#666', mr: 1, fontSize: 18 }} />
+                          <Typography variant="body2" color="text.secondary">
+                            Battery
+                          </Typography>
+                        </Box>
+                        <Typography 
+                          variant="body2" 
+                          sx={{ 
+                            fontWeight: 'bold',
+                            color: device.battery > 60 ? '#4caf50' : device.battery > 30 ? '#ff9800' : '#f44336'
+                          }}
+                        >
+                          {device.battery}%
                         </Typography>
                       </Box>
-                      <Typography 
-                        variant="body2" 
-                        sx={{ 
-                          fontWeight: 'bold',
-                          color: device.battery > 60 ? '#4caf50' : device.battery > 30 ? '#ff9800' : '#f44336'
-                        }}
-                      >
-                        {device.battery}%
-                      </Typography>
+                      <LinearProgress
+                        variant="determinate"
+                        value={device.battery}
+                        color={getBatteryColor(device.battery)}
+                        sx={{ height: 8, borderRadius: 4 }}
+                      />
                     </Box>
-                    <LinearProgress
-                      variant="determinate"
-                      value={device.battery}
-                      color={getBatteryColor(device.battery)}
-                      sx={{ height: 8, borderRadius: 4 }}
-                    />
-                  </Box>
+                  )}
 
                   {/* Video Status */}
                   <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
@@ -474,7 +489,7 @@ const TricorderFarmDashboard: React.FC = () => {
 
                   {/* Last Seen */}
                   <Typography variant="caption" color="text.disabled">
-                    Last seen: {new Date(device.last_seen).toLocaleTimeString()}
+                    Last seen: {device.last_seen ? new Date(device.last_seen).toLocaleTimeString() : 'Unknown'}
                   </Typography>
                 </CardContent>
 
@@ -486,7 +501,11 @@ const TricorderFarmDashboard: React.FC = () => {
                     color="success"
                     startIcon={<PlayIcon />}
                     sx={{ flex: 1, mr: 1 }}
-                    disabled={device.status !== 'online'}
+                    disabled={device.status !== 'online' || isExecutingCommand}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      executeCommand(device.device_id, 'play');
+                    }}
                   >
                     Play
                   </Button>
@@ -496,7 +515,11 @@ const TricorderFarmDashboard: React.FC = () => {
                     color="warning"
                     startIcon={<StopIcon />}
                     sx={{ flex: 1, mr: 1 }}
-                    disabled={device.status !== 'online'}
+                    disabled={device.status !== 'online' || isExecutingCommand}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      executeCommand(device.device_id, 'stop');
+                    }}
                   >
                     Stop
                   </Button>
@@ -579,10 +602,24 @@ const TricorderFarmDashboard: React.FC = () => {
               {selectedDevices.size} selected
             </Typography>
             <Box sx={{ display: 'flex', gap: 1 }}>
-              <Button size="small" variant="contained" color="success" startIcon={<PlayIcon />}>
+              <Button 
+                size="small" 
+                variant="contained" 
+                color="success" 
+                startIcon={<PlayIcon />}
+                disabled={isExecutingCommand}
+                onClick={() => executeBulkCommand('play')}
+              >
                 Play All
               </Button>
-              <Button size="small" variant="contained" color="warning" startIcon={<StopIcon />}>
+              <Button 
+                size="small" 
+                variant="contained" 
+                color="warning" 
+                startIcon={<StopIcon />}
+                disabled={isExecutingCommand}
+                onClick={() => executeBulkCommand('stop')}
+              >
                 Stop All
               </Button>
             </Box>
@@ -616,7 +653,10 @@ const TricorderFarmDashboard: React.FC = () => {
             horizontal: 'right',
           }}
         >
-          <MenuItem onClick={handleMenuClose}>
+          <MenuItem onClick={() => {
+            handleMenuClose();
+            refreshDevices();
+          }}>
             <ListItemIcon>
               <RefreshIcon fontSize="small" />
             </ListItemIcon>

@@ -13,9 +13,6 @@
 #include <SPI.h>
 #include <FS.h>
 #include <JPEGDEC.h>
-#include <ArduinoOTA.h>
-#include <Update.h>
-#include <HTTPClient.h>
 
 // Pin definitions for ESP32-2432S032C-I
 #define LED_PIN 21         // NeoPixel data pin (external connection) - IO21
@@ -44,7 +41,7 @@ const int UDP_PORT = 8888;
 
 // Device identification
 String deviceId = "TRICORDER_001";
-String firmwareVersion = "0.2-OTA";
+String firmwareVersion = "0.3";
 
 // Hardware objects
 CRGB leds[NUM_LEDS];
@@ -90,7 +87,6 @@ void pulseEffect(int r, int g, int b, int duration = 2000);
 void setBuiltinLED(int r, int g, int b);
 void sendResponse(String commandId, String result);
 void sendStatus(String commandId);
-void setupOTA();
 bool initializeSDCard();
 bool playVideo(String filename, bool loop = false);
 void stopVideo();
@@ -245,11 +241,8 @@ void setup() {
       MDNS.addService("tricorder", "udp", UDP_PORT);
     }
     
-    // Initialize OTA updates
-    setupOTA();
-    
-    // Set built-in LED to green when connected
-    setBuiltinLED(0, 255, 0);
+    // Set built-in LED to white when connected (standby look)
+    setBuiltinLED(255, 255, 255);
   } else {
     Serial.println("\nFailed to connect to WiFi");
     currentLine++;
@@ -367,12 +360,6 @@ void setup() {
 }
 
 void loop() {
-  // Handle OTA updates
-  ArduinoOTA.handle();
-  
-  // Handle OTA web server - commented out for now
-  // otaServer.handleClient();
-  
   // Handle UDP commands
   handleUDPCommands();
   
@@ -569,24 +556,6 @@ void handleUDPCommands() {
       }
       else if (action == "status") {
         sendStatus(commandId);
-      }
-      else if (action == "ota_info") {
-        JsonDocument response;
-        response["commandId"] = commandId;
-        response["deviceId"] = deviceId;
-        response["otaEnabled"] = true;
-        response["hostname"] = deviceId;
-        response["ipAddress"] = WiFi.localIP().toString();
-        response["result"] = "OTA Ready - Use Arduino IDE or PlatformIO for updates";
-        
-        String responseStr;
-        serializeJson(response, responseStr);
-        
-        udp.beginPacket(udp.remoteIP(), udp.remotePort());
-        udp.write((const uint8_t*)responseStr.c_str(), responseStr.length());
-        udp.endPacket();
-        
-        Serial.printf("Sent OTA info: %s\n", responseStr.c_str());
       }
     }
   }
@@ -1530,126 +1499,3 @@ bool displayBootImage(String filename) {
   
   return false;
 }
-
-void setupOTA() {
-  ArduinoOTA.setHostname(deviceId.c_str());
-  ArduinoOTA.setPassword("tricorder123");  // Set OTA password for security
-  
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch";
-    } else { // U_SPIFFS or U_FS
-      type = "filesystem";
-    }
-    
-    // Stop video playback and clear display
-    videoPlaying = false;
-    currentVideo = "";
-    
-    // Display OTA status on screen
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_YELLOW);
-    tft.setTextSize(2);
-    tft.setCursor(10, 10);
-    tft.println("OTA UPDATE");
-    tft.setCursor(10, 40);
-    tft.println("Starting...");
-    tft.setCursor(10, 70);
-    tft.setTextSize(1);
-    tft.println("Type: " + type);
-    
-    setBuiltinLED(255, 165, 0);  // Orange during update
-    
-    Serial.println("OTA Update Start - Type: " + type);
-  });
-  
-  ArduinoOTA.onEnd([]() {
-    tft.fillRect(10, 70, 300, 30, TFT_BLACK);
-    tft.setCursor(10, 70);
-    tft.setTextColor(TFT_GREEN);
-    tft.setTextSize(2);
-    tft.println("UPDATE COMPLETE!");
-    tft.setCursor(10, 100);
-    tft.setTextSize(1);
-    tft.println("Rebooting in 3 seconds...");
-    
-    setBuiltinLED(0, 255, 0);  // Green when complete
-    
-    Serial.println("OTA Update Complete - Rebooting...");
-    delay(3000);  // Give time to see the message
-  });
-  
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    static unsigned int lastPercent = 101;
-    unsigned int percent = (progress / (total / 100));
-    
-    // Update display every 5% to avoid too frequent updates
-    if (percent != lastPercent && percent % 5 == 0) {
-      tft.fillRect(10, 90, 300, 40, TFT_BLACK);
-      tft.setCursor(10, 90);
-      tft.setTextColor(TFT_CYAN);
-      tft.setTextSize(2);
-      tft.printf("Progress: %u%%", percent);
-      
-      // Draw progress bar
-      int barWidth = 200;
-      int barHeight = 10;
-      int barX = 10;
-      int barY = 120;
-      
-      tft.drawRect(barX, barY, barWidth, barHeight, TFT_WHITE);
-      int fillWidth = (barWidth - 2) * percent / 100;
-      if (fillWidth > 0) {
-        tft.fillRect(barX + 1, barY + 1, fillWidth, barHeight - 2, TFT_CYAN);
-      }
-      
-      lastPercent = percent;
-    }
-    
-    Serial.printf("OTA Progress: %u%%\r", percent);
-  });
-  
-  ArduinoOTA.onError([](ota_error_t error) {
-    tft.fillScreen(TFT_RED);
-    tft.setTextColor(TFT_WHITE);
-    tft.setCursor(10, 10);
-    tft.println("OTA Error!");
-    
-    setBuiltinLED(255, 0, 0);  // Red for error
-    
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) {
-      Serial.println("Auth Failed");
-      tft.setCursor(10, 40);
-      tft.println("Auth Failed");
-    } else if (error == OTA_BEGIN_ERROR) {
-      Serial.println("Begin Failed");
-      tft.setCursor(10, 40);
-      tft.println("Begin Failed");
-    } else if (error == OTA_CONNECT_ERROR) {
-      Serial.println("Connect Failed");
-      tft.setCursor(10, 40);
-      tft.println("Connect Failed");
-    } else if (error == OTA_RECEIVE_ERROR) {
-      Serial.println("Receive Failed");
-      tft.setCursor(10, 40);
-      tft.println("Receive Failed");
-    } else if (error == OTA_END_ERROR) {
-      Serial.println("End Failed");
-      tft.setCursor(10, 40);
-      tft.println("End Failed");
-    }
-    
-    delay(5000);
-    ESP.restart();
-  });
-  
-  ArduinoOTA.begin();
-  Serial.println("OTA Ready - Hostname: " + String(deviceId) + ", Password protected");
-  Serial.println("Use Arduino IDE Tools -> Port to find network port, or PlatformIO OTA upload");
-}
-
-// Note: Web-based OTA server commented out - use Arduino IDE or PlatformIO for OTA updates
-// For web-based updates, consider using ESP32's AsyncWebServer library
-// and implementing proper authentication and security measures

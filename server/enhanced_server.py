@@ -75,27 +75,30 @@ def auto_configure_tricorder_for_sacn(device_id: str, device_info: dict):
         
     # Configure tricorder to respond to RGB channels 1, 2, 3 for built-in LED
     # and LED strip (if present)
-    try:
-        # Remove any existing configuration
-        sacn_receiver.remove_device(device_id)
+    # TEMPORARILY DISABLED FOR LED TESTING
+    # try:
+    #     # Remove any existing configuration
+    #     sacn_receiver.remove_device(device_id)
+    #     
+    #     # Add device with RGB channels 1, 2, 3 for both built-in LED and LED strip
+    #     success = sacn_receiver.add_device(
+    #         device_id=device_id,
+    #         ip_address=device_info['ip_address'],
+    #         universe=CONFIG['sacn_universe'],  # Use configured universe
+    #         start_channel=1,  # Not used for uniform strip control
+    #         num_leds=3,  # Enable LED strip with 3 LEDs
+    #         builtin_led_channels=(1, 2, 3)  # RGB on channels 1, 2, 3 for both built-in and strip
+    #     )
         
-        # Add device with RGB channels 1, 2, 3 for both built-in LED and LED strip
-        success = sacn_receiver.add_device(
-            device_id=device_id,
-            ip_address=device_info['ip_address'],
-            universe=CONFIG['sacn_universe'],  # Use configured universe
-            start_channel=1,  # Not used for uniform strip control
-            num_leds=3,  # Enable LED strip with 3 LEDs
-            builtin_led_channels=(1, 2, 3)  # RGB on channels 1, 2, 3 for both built-in and strip
-        )
-        
-        if success:
-            print(f"✅ Auto-configured {device_id} for sACN RGB control (channels 1,2,3 - built-in LED + LED strip)")
-        else:
-            print(f"⚠️ Failed to auto-configure {device_id} for sACN")
-            
-    except Exception as e:
-        print(f"❌ Error auto-configuring {device_id} for sACN: {e}")
+    #     if success:
+    #         print(f"✅ Auto-configured {device_id} for sACN RGB control (channels 1,2,3 - built-in LED + LED strip)")
+    #     else:
+    #         print(f"⚠️ Failed to auto-configure {device_id} for sACN")
+    #         
+    # except Exception as e:
+    #     print(f"❌ Error auto-configuring {device_id} for sACN: {e}")
+    
+    print(f"⚠ sACN auto-configuration temporarily disabled for {device_id} - testing direct LED control")
 
 class TricorderServer:
     def __init__(self):
@@ -945,8 +948,18 @@ def send_command():
             'timestamp': datetime.now().isoformat()
         }
         
-        # Add parameters if provided (for LED commands)
-        if parameters:
+        # Handle LED commands specially - ESP32 expects RGB values at top level
+        if action in ['set_led_color', 'set_builtin_led'] and parameters:
+            # Flatten LED parameters to top level for ESP32 compatibility
+            if 'r' in parameters:
+                esp32_command['r'] = parameters['r']
+            if 'g' in parameters:
+                esp32_command['g'] = parameters['g'] 
+            if 'b' in parameters:
+                esp32_command['b'] = parameters['b']
+            print(f"LED command flattened: R={parameters.get('r')}, G={parameters.get('g')}, B={parameters.get('b')}")
+        elif parameters:
+            # For non-LED commands, use parameters object
             esp32_command['parameters'] = parameters
         
         # Add data if provided (for other commands)

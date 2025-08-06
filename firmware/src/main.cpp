@@ -1,5 +1,5 @@
 /*
- * Tricorder Control Firmware - Enhanced with Video Playback
+ * Tricorder Control Firmware - Enhanced with Video Playback and Dual-Core Processing
  * ESP32-based prop controller with video playback from SD card
  */
 
@@ -13,6 +13,9 @@
 #include <SPI.h>
 #include <FS.h>
 #include <JPEGDEC.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
 
 // Pin definitions for ESP32-2432S032C-I
 #define LED_PIN 21         // NeoPixel data pin (external connection) - IO21
@@ -51,6 +54,43 @@ CRGB leds[NUM_LEDS];
 TFT_eSPI tft = TFT_eSPI();
 WiFiUDP udp;
 JPEGDEC jpeg;
+
+// Dual-Core Task Handles
+TaskHandle_t networkTaskHandle = NULL;
+TaskHandle_t videoTaskHandle = NULL;
+TaskHandle_t ledTaskHandle = NULL;
+
+// Inter-core communication queues
+QueueHandle_t ledCommandQueue = NULL;
+QueueHandle_t networkCommandQueue = NULL;
+QueueHandle_t videoCommandQueue = NULL;
+
+// LED Command Structure
+struct LEDCommand {
+  enum Type { SET_COLOR, SET_BRIGHTNESS, SET_INDIVIDUAL, SCANNER_EFFECT, PULSE_EFFECT };
+  Type type;
+  int r, g, b;
+  int brightness;
+  int ledIndex;
+  int delayMs;
+  int duration;
+};
+
+// Network Command Structure  
+struct NetworkCommand {
+  String data;
+  IPAddress remoteIP;
+  uint16_t remotePort;
+};
+
+// Video Command Structure
+struct VideoCommand {
+  enum Type { PLAY_VIDEO, DISPLAY_IMAGE, STOP_VIDEO };
+  Type type;
+  String filename;
+  bool loop;
+};
+
 // AsyncWebServer otaServer(80);  // Web server for OTA updates - commented out for now
 
 // Video playback objects
@@ -104,6 +144,13 @@ String getVideoList();
 void showVideoFrame();
 bool displayStaticImage(String filename);
 bool displayBootImage(String filename);
+void displayInitializationScreen();
+
+// Dual-core task functions
+void ledTask(void *pvParameters);
+void networkTask(void *pvParameters);
+void videoTask(void *pvParameters);
+void processNetworkCommand(String jsonCommand);
 
 void setup() {
   Serial.begin(115200);
@@ -163,6 +210,21 @@ void setup() {
   // Set built-in LED to blue during boot
   setBuiltinLED(0, 0, 255);
   
+  // Create inter-core communication queues BEFORE creating tasks
+  ledCommandQueue = xQueueCreate(10, sizeof(LEDCommand));
+  networkCommandQueue = xQueueCreate(20, sizeof(NetworkCommand));
+  videoCommandQueue = xQueueCreate(5, sizeof(VideoCommand));
+  
+  if (!ledCommandQueue || !networkCommandQueue || !videoCommandQueue) {
+    Serial.println("FATAL: Failed to create communication queues!");
+    while (true) {
+      setBuiltinLED(255, 0, 0); // Red error indication
+      delay(1000);
+    }
+  }
+  
+  Serial.println("Communication queues created successfully");
+  
   // Initialize display
   tft.init();
   tft.setRotation(0);  // 90° counter-clockwise from original rotation(1)
@@ -189,28 +251,71 @@ void setup() {
     tft.fillScreen(TFT_BLACK);
   }
   
-  // Set text properties for LCARS-style display
-  tft.setTextColor(TFT_WHITE);
-  tft.setTextSize(1);  // Smaller text to fit in the center box
+  // Display initialization screen
+  displayInitializationScreen();
   
-  // Position text in the center rectangular area (approximate coordinates)
-  int textX = 50;      // Left margin for center box
-  int textY = 70;      // Top of center box area (moved up 30 pixels)
-  int lineHeight = 12; // Line spacing for size 1 text
-  int currentLine = 0;
+  // Create dual-core tasks
+  Serial.println("Creating dual-core tasks...");
+  Serial.printf("Setup running on Core: %d\n", xPortGetCoreID());
   
-  tft.setCursor(textX, textY + (currentLine * lineHeight));
-  tft.println("TRICORDER CONTROL SYSTEM");
-  currentLine += 2;
+  // Create LED task on Core 1 (high priority for real-time response)
+  xTaskCreatePinnedToCore(
+    ledTask,           // Task function
+    "LED_Task",        // Task name
+    4096,              // Stack size
+    NULL,              // Parameters
+    3,                 // Priority (high)
+    &ledTaskHandle,    // Task handle
+    1                  // Core 1 (APP_CPU)
+  );
   
-  tft.setCursor(textX, textY + (currentLine * lineHeight));
-  tft.println("Initializing...");
+  // Create Network task on Core 0 (background processing)
+  xTaskCreatePinnedToCore(
+    networkTask,       // Task function
+    "Network_Task",    // Task name
+    8192,              // Stack size (larger for JSON processing)
+    NULL,              // Parameters
+    2,                 // Priority (medium)
+    &networkTaskHandle, // Task handle
+    0                  // Core 0 (PRO_CPU)
+  );
+  
+  // Create Video task on Core 0 (background processing)
+  xTaskCreatePinnedToCore(
+    videoTask,         // Task function
+    "Video_Task",      // Task name
+    8192,              // Stack size (larger for video processing)
+    NULL,              // Parameters
+    1,                 // Priority (low)
+    &videoTaskHandle,  // Task handle
+    0                  // Core 0 (PRO_CPU)
+  );
+  
+  // Wait a moment for tasks to initialize
+  delay(500);
+  
+  if (ledTaskHandle && networkTaskHandle && videoTaskHandle) {
+    Serial.println("✓ All dual-core tasks created successfully!");
+    setBuiltinLED(0, 255, 0); // Green success indication
+    
+    // Startup LED effect via task
+    LEDCommand startupEffect;
+    startupEffect.type = LEDCommand::SCANNER_EFFECT;
+    startupEffect.r = 0;
+    startupEffect.g = 255;
+    startupEffect.b = 0;
+    startupEffect.delayMs = 150;
+    xQueueSend(ledCommandQueue, &startupEffect, 0);
+  } else {
+    Serial.println("✗ Failed to create some tasks!");
+    setBuiltinLED(255, 255, 0); // Yellow warning indication
+  }
+  
+  // Display initialization screen
+  displayInitializationScreen();
   
   // Initialize WiFi
-  currentLine += 2;
-  tft.setCursor(textX, textY + (currentLine * lineHeight));
-  tft.println("Connecting to WiFi...");
-  
+  Serial.println("Connecting to WiFi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
@@ -218,32 +323,13 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED && attempts < 40) { // 20 second timeout
     delay(500);
     Serial.print(".");
-    
-    // Show connection progress
-    if (attempts % 4 == 0) {  // Update every 2 seconds
-      tft.setCursor(textX, textY + (currentLine * lineHeight));
-      tft.print("Connecting");
-      for (int i = 0; i < (attempts / 4) % 4; i++) {
-        tft.print(".");
-      }
-      tft.println("    "); // Clear any remaining characters
-    }
     attempts++;
   }
   
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
     Serial.println("\nWiFi connected!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-    
-    currentLine++;
-    tft.setCursor(textX, textY + (currentLine * lineHeight));
-    tft.println("WiFi: Connected");
-    currentLine++;
-    tft.setCursor(textX, textY + (currentLine * lineHeight));
-    tft.print("IP: ");
-    tft.println(WiFi.localIP().toString());
+    Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
     
     // Initialize UDP
     udp.begin(UDP_PORT);
@@ -255,89 +341,19 @@ void setup() {
       MDNS.addService("tricorder", "udp", UDP_PORT);
     }
     
-    // Set built-in LED to white when connected (standby look)
-    setBuiltinLED(255, 255, 255);
+    // Set built-in LED to green when connected
+    setBuiltinLED(0, 255, 0);
   } else {
     Serial.println("\nFailed to connect to WiFi");
-    currentLine++;
-    tft.setCursor(textX, textY + (currentLine * lineHeight));
-    tft.setTextColor(TFT_RED);
-    tft.println("WiFi: Connection Failed");
-    tft.setTextColor(TFT_WHITE);
-    
     // Set built-in LED to red when failed
     setBuiltinLED(255, 0, 0);
   }
   
-  // Initialize SD Card (if not already done for boot image)
-  currentLine += 2;
-  tft.setCursor(textX, textY + (currentLine * lineHeight));
-  tft.println("Initializing SD Card...");
-  
-  bool sdAlreadyInitialized = SD.begin(SD_CS); // This will return true if already initialized
-  if (sdAlreadyInitialized || SD.begin(SD_CS)) {
+  // Initialize SD Card
+  Serial.println("Initializing SD card...");
+  if (SD.begin(SD_CS)) {
     sdCardInitialized = true;
     Serial.println("SD card initialized successfully!");
-    
-    currentLine++;
-    tft.setCursor(textX, textY + (currentLine * lineHeight));
-    tft.println("SD Card: OK");
-    
-    // Perform SD card health checks (but don't display them on screen to save space)
-    Serial.println("=== SD Card Health Check ===");
-    
-    // Get card type
-    uint8_t cardType = SD.cardType();
-    Serial.printf("SD Card Type: ");
-    if (cardType == CARD_NONE) {
-      Serial.println("No SD card attached");
-    } else if (cardType == CARD_MMC) {
-      Serial.println("MMC");
-    } else if (cardType == CARD_SD) {
-      Serial.println("SDSC");
-    } else if (cardType == CARD_SDHC) {
-      Serial.println("SDHC");
-    } else {
-      Serial.println("Unknown");
-    }
-    
-    // Get card size
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    Serial.printf("SD Card Size: %lluMB\n", cardSize);
-    
-    // Get used/total space
-    size_t totalBytes = SD.totalBytes();
-    size_t usedBytes = SD.usedBytes();
-    Serial.printf("Total space: %d bytes\n", totalBytes);
-    Serial.printf("Used space: %d bytes\n", usedBytes);
-    Serial.printf("Free space: %d bytes\n", totalBytes - usedBytes);
-    
-    // Test basic file operations
-    Serial.println("Testing basic file operations...");
-    File testFile = SD.open("/sd_test.txt", FILE_WRITE);
-    if (testFile) {
-      testFile.println("SD card test write");
-      testFile.close();
-      Serial.println("Test write: SUCCESS");
-      
-      // Test read back
-      testFile = SD.open("/sd_test.txt", FILE_READ);
-      if (testFile) {
-        String testContent = testFile.readString();
-        testFile.close();
-        Serial.printf("Test read: SUCCESS - content: '%s'\n", testContent.c_str());
-        
-        // Clean up test file
-        SD.remove("/sd_test.txt");
-        Serial.println("Test file cleanup: SUCCESS");
-      } else {
-        Serial.println("Test read: FAILED");
-      }
-    } else {
-      Serial.println("Test write: FAILED");
-    }
-    
-    Serial.println("=== End SD Card Health Check ===");
     
     // Create videos directory if it doesn't exist
     if (!SD.exists(videoDirectory)) {
@@ -349,345 +365,418 @@ void setup() {
     listVideos();
   } else {
     Serial.println("SD card initialization failed!");
-    currentLine++;
-    tft.setCursor(textX, textY + (currentLine * lineHeight));
-    tft.setTextColor(TFT_RED);
-    tft.println("SD Card: FAILED");
-    tft.setTextColor(TFT_WHITE);
   }
-  
-  // Show system ready message
-  currentLine += 2;
-  tft.setCursor(textX, textY + (currentLine * lineHeight));
-  tft.setTextColor(TFT_GREEN);
-  tft.println("SYSTEM READY");
-  tft.setTextColor(TFT_WHITE);
-  
-  delay(1000); // Show status briefly
-  
-  // Set initial LED state to blue (standby look)
-  fill_solid(leds, NUM_LEDS, CRGB::Blue);
-  FastLED.show();
-  Serial.println("LEDs set to blue standby mode");
   
   Serial.println("Setup complete!");
 }
 
 void loop() {
-  // Handle UDP commands
-  handleUDPCommands();
+  // Main loop now just handles system monitoring and WiFi status
+  // Most work is done by dedicated tasks on both cores
   
-  // Update video playback
-  if (videoPlaying) {
-    updateVideoPlayback();
+  // Check WiFi connection and notify network task if status changes
+  static bool lastWifiStatus = false;
+  bool currentWifiStatus = (WiFi.status() == WL_CONNECTED);
+  
+  if (currentWifiStatus != lastWifiStatus) {
+    wifiConnected = currentWifiStatus;
+    if (!currentWifiStatus) {
+      Serial.println("WiFi disconnected!");
+      setBuiltinLED(255, 0, 0); // Red for disconnected
+    } else {
+      Serial.println("WiFi reconnected!");
+      setBuiltinLED(0, 255, 0); // Green for connected
+    }
+    lastWifiStatus = currentWifiStatus;
   }
   
-  // Send periodic status to server (every 10 seconds)
-  unsigned long currentTime = millis();
-  if (wifiConnected && (currentTime - lastStatusSend > STATUS_INTERVAL)) {
-    sendPeriodicStatus();
-    lastStatusSend = currentTime;
+  // Monitor system health
+  static unsigned long lastHealthCheck = 0;
+  if (millis() - lastHealthCheck > 30000) { // Every 30 seconds
+    Serial.printf("System Health - Free Heap: %d bytes, Core: %d\n", 
+                  ESP.getFreeHeap(), xPortGetCoreID());
+    
+    // Check if tasks are still running
+    if (ledTaskHandle == NULL || networkTaskHandle == NULL || videoTaskHandle == NULL) {
+      Serial.println("WARNING: One or more tasks have crashed!");
+      setBuiltinLED(255, 255, 0); // Yellow for warning
+    }
+    
+    lastHealthCheck = millis();
   }
   
-  // Check WiFi connection
-  if (WiFi.status() != WL_CONNECTED && wifiConnected) {
-    wifiConnected = false;
-    Serial.println("WiFi disconnected!");
+  // Very short delay to prevent watchdog issues
+  delay(10);
+}
+
+// Initialization Screen Function
+void displayInitializationScreen() {
+  // Set text properties for LCARS-style display overlayed on boot image
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextSize(1);  // Smaller text to fit in the center box
+  
+  // Position text in the center rectangular area (approximate coordinates)
+  int textX = 50;      // Left margin for center box
+  int textY = 70;      // Top of center box area
+  int lineHeight = 12; // Line spacing for size 1 text
+  int currentLine = 0;
+  
+  tft.setCursor(textX, textY + (currentLine * lineHeight));
+  tft.println("TRICORDER CONTROL SYSTEM");
+  currentLine += 2;
+  
+  tft.setCursor(textX, textY + (currentLine * lineHeight));
+  tft.println("Initializing Systems...");
+}
+
+// LED Task - Runs on Core 1 for real-time LED control
+void ledTask(void *pvParameters) {
+  Serial.printf("LED Task starting on Core: %d\n", xPortGetCoreID());
+  
+  // Re-initialize FastLED on this core to ensure proper multi-core operation
+  FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+  FastLED.setBrightness(ledBrightness);
+  Serial.println("FastLED re-initialized on LED task core");
+  
+  LEDCommand command;
+  
+  while (true) {
+    // Wait for LED commands from other tasks/cores
+    if (xQueueReceive(ledCommandQueue, &command, portMAX_DELAY) == pdPASS) {
+      Serial.printf("LED Task received command type: %d\n", command.type);
+      switch (command.type) {
+        case LEDCommand::SET_COLOR:
+          Serial.printf("Setting LED color to R:%d G:%d B:%d\n", command.r, command.g, command.b);
+          currentColor = CRGB(command.r, command.g, command.b);
+          fill_solid(leds, NUM_LEDS, currentColor);
+          FastLED.show();
+          Serial.println("LED color updated and displayed");
+          break;
+          
+        case LEDCommand::SET_BRIGHTNESS:
+          ledBrightness = constrain(command.brightness, 0, 255);
+          FastLED.setBrightness(ledBrightness);
+          FastLED.show();
+          break;
+          
+        case LEDCommand::SET_INDIVIDUAL:
+          if (command.ledIndex >= 0 && command.ledIndex < NUM_LEDS) {
+            leds[command.ledIndex] = CRGB(command.r, command.g, command.b);
+            FastLED.show();
+          }
+          break;
+          
+        case LEDCommand::SCANNER_EFFECT:
+          {
+            CRGB color = CRGB(command.r, command.g, command.b);
+            // Scan left to right
+            for (int i = 0; i < NUM_LEDS; i++) {
+              fill_solid(leds, NUM_LEDS, CRGB::Black);
+              leds[i] = color;
+              FastLED.show();
+              delay(command.delayMs);
+            }
+            // Scan right to left
+            for (int i = NUM_LEDS - 2; i >= 1; i--) {
+              fill_solid(leds, NUM_LEDS, CRGB::Black);
+              leds[i] = color;
+              FastLED.show();
+              delay(command.delayMs);
+            }
+          }
+          break;
+          
+        case LEDCommand::PULSE_EFFECT:
+          {
+            CRGB color = CRGB(command.r, command.g, command.b);
+            unsigned long startTime = millis();
+            
+            while (millis() - startTime < command.duration) {
+              float progress = (millis() - startTime) / (float)command.duration;
+              float brightness = (sin(progress * 2 * PI) + 1) / 2; // 0 to 1
+              
+              CRGB dimmedColor = color;
+              dimmedColor.nscale8(255 * brightness);
+              
+              fill_solid(leds, NUM_LEDS, dimmedColor);
+              FastLED.show();
+              delay(20);
+            }
+          }
+          break;
+      }
+    }
+    
+    // Small yield to prevent watchdog issues
+    taskYIELD();
+  }
+}
+
+// Network Task - Runs on Core 0 for UDP/WiFi handling
+void networkTask(void *pvParameters) {
+  Serial.printf("Network Task starting on Core: %d\n", xPortGetCoreID());
+  
+  // Initialize WiFi in this task
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) { // 20 second timeout
+    delay(500);
+    Serial.print(".");
+    attempts++;
   }
   
-  delay(1);  // Reduced from 10ms to 1ms for faster response
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    Serial.println("\nWiFi connected!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    
+    // Initialize UDP
+    udp.begin(UDP_PORT);
+    Serial.printf("UDP server listening on port %d\n", UDP_PORT);
+    
+    // Start mDNS
+    if (MDNS.begin(deviceId.c_str())) {
+      Serial.println("mDNS responder started");
+      MDNS.addService("tricorder", "udp", UDP_PORT);
+    }
+    
+    // Set built-in LED to white when connected
+    setBuiltinLED(255, 255, 255);
+  } else {
+    Serial.println("\nFailed to connect to WiFi");
+    setBuiltinLED(255, 0, 0);
+  }
+  
+  // Initialize SD Card
+  if (SD.begin(SD_CS)) {
+    sdCardInitialized = true;
+    Serial.println("SD card initialized successfully!");
+    
+    // Create videos directory if it doesn't exist
+    if (!SD.exists(videoDirectory)) {
+      SD.mkdir(videoDirectory);
+      Serial.println("Created /videos directory");
+    }
+    
+    // List available videos
+    listVideos();
+  } else {
+    Serial.println("SD card initialization failed!");
+  }
+  
+  // Main network loop
+  unsigned long lastStatusSend = 0;
+  
+  while (true) {
+    // Handle UDP commands if connected
+    if (wifiConnected) {
+      int packetSize = udp.parsePacket();
+      if (packetSize) {
+        char incomingPacket[255];
+        int len = udp.read(incomingPacket, 255);
+        if (len > 0) {
+          incomingPacket[len] = 0;
+        }
+        
+        // Process the command (simplified version)
+        processNetworkCommand(String(incomingPacket));
+      }
+      
+      // Send periodic status to server (every 10 seconds)
+      unsigned long currentTime = millis();
+      if (currentTime - lastStatusSend > STATUS_INTERVAL) {
+        sendPeriodicStatus();
+        lastStatusSend = currentTime;
+      }
+    }
+    
+    // Small delay to prevent overwhelming the network
+    delay(5);
+  }
+}
+
+// Video Task - Runs on Core 0 for video processing
+void videoTask(void *pvParameters) {
+  Serial.printf("Video Task starting on Core: %d\n", xPortGetCoreID());
+  
+  VideoCommand command;
+  
+  while (true) {
+    // Wait for video commands
+    if (xQueueReceive(videoCommandQueue, &command, 100) == pdPASS) {
+      switch (command.type) {
+        case VideoCommand::PLAY_VIDEO:
+          playVideo(command.filename, command.loop);
+          break;
+          
+        case VideoCommand::DISPLAY_IMAGE:
+          displayStaticImage(command.filename);
+          break;
+          
+        case VideoCommand::STOP_VIDEO:
+          stopVideo();
+          break;
+      }
+    }
+    
+    // Update video playback if playing
+    if (videoPlaying) {
+      updateVideoPlayback();
+    }
+    
+    // Small delay to prevent overwhelming the video system
+    delay(10);
+  }
+}
+
+// Simplified network command processor for network task
+void processNetworkCommand(String jsonCommand) {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, jsonCommand);
+  
+  if (!error) {
+    String action = doc["action"];
+    String commandId = doc["commandId"];
+    
+    // Handle discovery command
+    if (action == "discovery") {
+      JsonDocument response;
+      response["commandId"] = commandId;
+      response["deviceId"] = deviceId;
+      response["type"] = "tricorder";
+      response["firmwareVersion"] = firmwareVersion;
+      response["ipAddress"] = WiFi.localIP().toString();
+      
+      String responseStr;
+      serializeJson(response, responseStr);
+      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      udp.print(responseStr);
+      udp.endPacket();
+    }
+    // Handle LED commands by sending to LED task
+    else if (action == "set_led_color") {
+      LEDCommand ledCmd;
+      ledCmd.type = LEDCommand::SET_COLOR;
+      ledCmd.r = doc["r"];
+      ledCmd.g = doc["g"];
+      ledCmd.b = doc["b"];
+      
+      Serial.printf("Network task sending LED command R:%d G:%d B:%d\n", ledCmd.r, ledCmd.g, ledCmd.b);
+      BaseType_t result = xQueueSend(ledCommandQueue, &ledCmd, 0);
+      if (result == pdPASS) {
+        Serial.println("LED command successfully queued");
+      } else {
+        Serial.println("Failed to queue LED command - queue may be full");
+      }
+      
+      sendResponse(commandId, "LED color set");
+    }
+    else if (action == "set_builtin_led") {
+      int r = doc["r"];
+      int g = doc["g"];
+      int b = doc["b"];
+      setBuiltinLED(r, g, b);
+      
+      sendResponse(commandId, "Built-in LED color set");
+    }
+    // Handle video commands by sending to video task
+    else if (action == "play_video") {
+      VideoCommand vidCmd;
+      vidCmd.type = VideoCommand::PLAY_VIDEO;
+      vidCmd.filename = doc["filename"].as<String>();
+      vidCmd.loop = doc["loop"];
+      xQueueSend(videoCommandQueue, &vidCmd, 0);
+      
+      sendResponse(commandId, "Video playback started");
+    }
+    else if (action == "display_image") {
+      VideoCommand vidCmd;
+      vidCmd.type = VideoCommand::DISPLAY_IMAGE;
+      vidCmd.filename = doc["filename"].as<String>();
+      xQueueSend(videoCommandQueue, &vidCmd, 0);
+      
+      sendResponse(commandId, "Image displayed");
+    }
+    else if (action == "status") {
+      sendStatus(commandId);
+    }
+  }
 }
 
 void handleUDPCommands() {
-  int packetSize = udp.parsePacket();
-  if (packetSize) {
-    char incomingPacket[255];
-    int len = udp.read(incomingPacket, 255);
-    if (len > 0) {
-      incomingPacket[len] = 0;
-    }
-    
-    // Parse JSON command
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, incomingPacket);
-    
-    if (!error) {
-      String action = doc["action"];
-      String commandId = doc["commandId"];
-      
-      // Handle discovery command
-      if (action == "discovery") {
-        JsonDocument response;
-        response["commandId"] = commandId;
-        response["deviceId"] = deviceId;
-        response["type"] = "tricorder";
-        response["firmwareVersion"] = firmwareVersion;
-        response["ipAddress"] = WiFi.localIP().toString();
-        
-        String responseStr;
-        serializeJson(response, responseStr);
-        
-        udp.beginPacket(udp.remoteIP(), udp.remotePort());
-        udp.write((const uint8_t*)responseStr.c_str(), responseStr.length());
-        udp.endPacket();
-        
-        Serial.printf("Sent discovery response: %s\n", responseStr.c_str());
-      }
-      // Handle ping command
-      else if (action == "ping") {
-        JsonDocument response;
-        response["commandId"] = commandId;
-        response["deviceId"] = deviceId;
-        response["result"] = "pong";
-        response["timestamp"] = millis();
-        
-        String responseStr;
-        serializeJson(response, responseStr);
-        
-        udp.beginPacket(udp.remoteIP(), udp.remotePort());
-        udp.write((const uint8_t*)responseStr.c_str(), responseStr.length());
-        udp.endPacket();
-        
-        Serial.printf("Sent ping response: %s\n", responseStr.c_str());
-      }
-      else if (action == "set_led_color") {
-        int r = doc["parameters"]["r"];
-        int g = doc["parameters"]["g"];
-        int b = doc["parameters"]["b"];
-        setLEDColor(r, g, b);
-        sendResponse(commandId, "LED color set");
-      }
-      else if (action == "set_led_brightness") {
-        int brightness = doc["parameters"]["brightness"];
-        setLEDBrightness(brightness);
-        sendResponse(commandId, "LED brightness set");
-      }
-      else if (action == "set_individual_led") {
-        int ledIndex = doc["parameters"]["ledIndex"];
-        int r = doc["parameters"]["r"];
-        int g = doc["parameters"]["g"];
-        int b = doc["parameters"]["b"];
-        setIndividualLED(ledIndex, r, g, b);
-        sendResponse(commandId, "Individual LED " + String(ledIndex) + " color set");
-      }
-      else if (action == "scanner_effect") {
-        int r = doc["parameters"]["r"];
-        int g = doc["parameters"]["g"];
-        int b = doc["parameters"]["b"];
-        int delayMs = doc["parameters"]["delay"].as<int>() || 100;
-        scannerEffect(r, g, b, delayMs);
-        sendResponse(commandId, "Scanner effect executed");
-      }
-      else if (action == "pulse_effect") {
-        int r = doc["parameters"]["r"];
-        int g = doc["parameters"]["g"];
-        int b = doc["parameters"]["b"];
-        int duration = doc["parameters"]["duration"].as<int>() || 2000;
-        pulseEffect(r, g, b, duration);
-        sendResponse(commandId, "Pulse effect executed");
-      }
-      else if (action == "led_diagnostic") {
-        // LED diagnostic command to help troubleshoot
-        Serial.println("=== LED DIAGNOSTIC ===");
-        Serial.printf("NUM_LEDS: %d\n", NUM_LEDS);
-        Serial.printf("LED_PIN: %d\n", LED_PIN);
-        Serial.printf("Current brightness: %d\n", ledBrightness);
-        Serial.printf("Current color: R:%d G:%d B:%d\n", currentColor.r, currentColor.g, currentColor.b);
-        
-        // Test sequence
-        Serial.println("Testing LEDs with sequence...");
-        
-        // Clear all LEDs
-        fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show();
-        delay(200);  // Reduced from 500ms
-        
-        // Test each LED individually
-        for (int i = 0; i < NUM_LEDS; i++) {
-          Serial.printf("Testing LED %d - RED\n", i);
-          fill_solid(leds, NUM_LEDS, CRGB::Black);
-          leds[i] = CRGB::Red;
-          FastLED.show();
-          delay(500);  // Reduced from 1000ms
-          
-          Serial.printf("Testing LED %d - GREEN\n", i);
-          leds[i] = CRGB::Green;
-          FastLED.show();
-          delay(500);  // Reduced from 1000ms
-          
-          Serial.printf("Testing LED %d - BLUE\n", i);
-          leds[i] = CRGB::Blue;
-          FastLED.show();
-          delay(500);  // Reduced from 1000ms
-        }
-        
-        // Test all LEDs together
-        Serial.println("Testing all LEDs - WHITE");
-        fill_solid(leds, NUM_LEDS, CRGB::White);
-        FastLED.show();
-        delay(1000);  // Reduced from 2000ms
-        
-        // Return to black
-        fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show();
-        
-        Serial.println("=== LED DIAGNOSTIC COMPLETE ===");
-        sendResponse(commandId, "LED diagnostic complete - check Serial monitor for details");
-      }
-      else if (action == "set_builtin_led") {
-        int r = doc["parameters"]["r"];
-        int g = doc["parameters"]["g"];
-        int b = doc["parameters"]["b"];
-        setBuiltinLED(r, g, b);
-        sendResponse(commandId, "Built-in LED color set");
-      }
-      else if (action == "play_video") {
-        String filename = doc["parameters"]["filename"];
-        bool loop = doc["parameters"]["loop"].as<bool>() || false;
-        
-        if (sdCardInitialized) {
-          if (playVideo(filename, loop)) {
-            sendResponse(commandId, "Video started: " + filename);
-          } else {
-            sendResponse(commandId, "Failed to start video: " + filename);
-          }
-        } else {
-          sendResponse(commandId, "SD card not available");
-        }
-      }
-      else if (action == "stop_video") {
-        stopVideo();
-        sendResponse(commandId, "Video stopped");
-      }
-      else if (action == "list_videos") {
-        if (sdCardInitialized) {
-          listVideos(); // Still print to serial for debugging
-          String videoList = getVideoList();
-          sendResponse(commandId, videoList);
-        } else {
-          sendResponse(commandId, "SD card not available");
-        }
-      }
-      else if (action == "display_image") {
-        String filename = doc["parameters"]["filename"];
-        
-        if (sdCardInitialized) {
-          if (displayStaticImage(filename)) {
-            sendResponse(commandId, "Image displayed: " + filename);
-          } else {
-            sendResponse(commandId, "Failed to display image: " + filename);
-          }
-        } else {
-          sendResponse(commandId, "SD card not available");
-        }
-      }
-      else if (action == "display_boot_screen") {
-        // Display the boot screen with startup messages
-        if (displayBootImage("/boot.jpg") || displayBootImage("/videos/boot.jpg")) {
-          // Set text properties for LCARS-style display
-          tft.setTextColor(TFT_WHITE);
-          tft.setTextSize(1);
-          
-          // Position text in the center rectangular area
-          int textX = 50;
-          int textY = 70;
-          int lineHeight = 12;
-          int currentLine = 0;
-          
-          tft.setCursor(textX, textY + (currentLine * lineHeight));
-          tft.println("TRICORDER CONTROL SYSTEM");
-          currentLine += 2;
-          
-          tft.setCursor(textX, textY + (currentLine * lineHeight));
-          tft.setTextColor(TFT_GREEN);
-          tft.println("SYSTEM READY");
-          currentLine++;
-          
-          tft.setCursor(textX, textY + (currentLine * lineHeight));
-          tft.setTextColor(TFT_WHITE);
-          tft.println("WiFi: Connected");
-          currentLine++;
-          
-          tft.setCursor(textX, textY + (currentLine * lineHeight));
-          tft.print("IP: ");
-          tft.println(WiFi.localIP().toString());
-          currentLine++;
-          
-          tft.setCursor(textX, textY + (currentLine * lineHeight));
-          tft.println("SD Card: OK");
-          
-          sendResponse(commandId, "Boot screen displayed");
-        } else {
-          sendResponse(commandId, "Failed to display boot screen");
-        }
-      }
-      else if (action == "status") {
-        sendStatus(commandId);
-      }
-    }
-  }
+  // This function is now simplified since network handling is done by networkTask
+  // Keep it for legacy compatibility but it does minimal work
 }
 
 void setLEDColor(int r, int g, int b) {
-  currentColor = CRGB(r, g, b);
-  fill_solid(leds, NUM_LEDS, currentColor);
-  FastLED.show();
+  // Send command to LED task for thread-safe execution
+  LEDCommand cmd;
+  cmd.type = LEDCommand::SET_COLOR;
+  cmd.r = r;
+  cmd.g = g;
+  cmd.b = b;
+  
+  if (ledCommandQueue) {
+    xQueueSend(ledCommandQueue, &cmd, 0);
+  }
 }
 
 void setLEDBrightness(int brightness) {
-  ledBrightness = constrain(brightness, 0, 255);
-  FastLED.setBrightness(ledBrightness);
-  FastLED.show();
-  Serial.printf("LED brightness set to %d\n", ledBrightness);
+  // Send command to LED task for thread-safe execution
+  LEDCommand cmd;
+  cmd.type = LEDCommand::SET_BRIGHTNESS;
+  cmd.brightness = brightness;
+  
+  if (ledCommandQueue) {
+    xQueueSend(ledCommandQueue, &cmd, 0);
+  }
 }
 
 // Set individual LED color (0-2 for the 3 front LEDs)
 void setIndividualLED(int ledIndex, int r, int g, int b) {
-  if (ledIndex >= 0 && ledIndex < NUM_LEDS) {
-    leds[ledIndex] = CRGB(r, g, b);
-    FastLED.show();
-    Serial.printf("LED %d color set to R:%d G:%d B:%d\n", ledIndex, r, g, b);
-  } else {
-    Serial.printf("Invalid LED index: %d (valid range: 0-%d)\n", ledIndex, NUM_LEDS - 1);
+  // Send command to LED task for thread-safe execution
+  LEDCommand cmd;
+  cmd.type = LEDCommand::SET_INDIVIDUAL;
+  cmd.ledIndex = ledIndex;
+  cmd.r = r;
+  cmd.g = g;
+  cmd.b = b;
+  
+  if (ledCommandQueue) {
+    xQueueSend(ledCommandQueue, &cmd, 0);
   }
 }
 
 // Create a scanner/Kitt effect across the 3 LEDs
 void scannerEffect(int r, int g, int b, int delayMs) {
-  CRGB color = CRGB(r, g, b);
+  // Send command to LED task for thread-safe execution
+  LEDCommand cmd;
+  cmd.type = LEDCommand::SCANNER_EFFECT;
+  cmd.r = r;
+  cmd.g = g;
+  cmd.b = b;
+  cmd.delayMs = delayMs;
   
-  // Scan left to right
-  for (int i = 0; i < NUM_LEDS; i++) {
-    fill_solid(leds, NUM_LEDS, CRGB::Black);
-    leds[i] = color;
-    FastLED.show();
-    delay(delayMs);
-  }
-  
-  // Scan right to left
-  for (int i = NUM_LEDS - 2; i >= 1; i--) {
-    fill_solid(leds, NUM_LEDS, CRGB::Black);
-    leds[i] = color;
-    FastLED.show();
-    delay(delayMs);
+  if (ledCommandQueue) {
+    xQueueSend(ledCommandQueue, &cmd, 0);
   }
 }
 
 // Pulse all LEDs (breathing effect)
 void pulseEffect(int r, int g, int b, int duration) {
-  CRGB color = CRGB(r, g, b);
-  unsigned long startTime = millis();
+  // Send command to LED task for thread-safe execution
+  LEDCommand cmd;
+  cmd.type = LEDCommand::PULSE_EFFECT;
+  cmd.r = r;
+  cmd.g = g;
+  cmd.b = b;
+  cmd.duration = duration;
   
-  while (millis() - startTime < duration) {
-    float progress = (millis() - startTime) / (float)duration;
-    float brightness = (sin(progress * 2 * PI) + 1) / 2; // 0 to 1
-    
-    CRGB dimmedColor = color;
-    dimmedColor.nscale8(255 * brightness);
-    
-    fill_solid(leds, NUM_LEDS, dimmedColor);
-    FastLED.show();
-    delay(20);
+  if (ledCommandQueue) {
+    xQueueSend(ledCommandQueue, &cmd, 0);
   }
 }
 

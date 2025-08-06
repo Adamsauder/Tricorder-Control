@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced Simple Server with ESP32 Simulator Support
-Combines the main tricorder server with simulator endpoints
+Enhanced Simple Server with sACN Data Viewer
+Tricorder control server with sACN monitoring capabilities
 """
 
 import asyncio
@@ -9,15 +9,24 @@ import socket
 import json
 import time
 import uuid
+import threading
+import ipaddress
 from datetime import datetime
 from typing import Dict, List, Optional
 from flask import Flask, render_template, request, jsonify, send_file, abort
 from flask_socketio import SocketIO, emit
-import threading
-import ipaddress
-import io
-from PIL import Image, ImageDraw, ImageFont
-import colorsys
+
+# Optional import for network interface detection
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+# Import sACN controller
+from sacn_controller import (
+    SACNReceiver, set_command_callback,
+    initialize_sacn_receiver, get_sacn_receiver, SACN_AVAILABLE
+)
 
 # Flask app setup
 app = Flask(__name__)
@@ -30,6 +39,9 @@ CONFIG = {
     "web_port": 8080,  # Changed to match web frontend proxy configuration
     "device_timeout": 30,  # seconds
     "command_timeout": 5,  # seconds
+    "sacn_enabled": True,  # Enable sACN integration
+    "sacn_universe": 1,  # Default sACN universe
+    "sacn_fps": 30,  # sACN update rate
 }
 
 # Global state
@@ -38,18 +50,6 @@ active_commands: Dict[str, Dict] = {}
 command_history: List[Dict] = []
 server_ip: Optional[str] = None
 server_start_time = time.time()
-
-# Simulator color mappings
-COLORS = {
-    'red': (255, 0, 0),
-    'green': (0, 255, 0),
-    'blue': (0, 0, 255),
-    'cyan': (0, 255, 255),
-    'magenta': (255, 0, 255),
-    'yellow': (255, 255, 0),
-    'white': (255, 255, 255),
-    'black': (0, 0, 0),
-}
 
 def get_server_ip():
     """Get the server's IP address"""
@@ -64,98 +64,38 @@ def get_server_ip():
             server_ip = "127.0.0.1"
     return server_ip or "127.0.0.1"
 
-def create_color_frame(color_name, width=320, height=240):
-    """Create a solid color frame"""
-    color = COLORS.get(color_name, COLORS['white'])
-    img = Image.new('RGB', (width, height), color)
-    return img
-
-def create_startup_frame(width=320, height=240):
-    """Create a startup frame with text"""
-    img = Image.new('RGB', (width, height), (0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    
-    try:
-        font = ImageFont.load_default()
-    except:
-        font = None
-    
-    text = "TRICORDER\nSTARTUP"
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-    
-    x = (width - text_width) // 2
-    y = (height - text_height) // 2
-    
-    draw.text((x, y), text, fill=(0, 255, 0), font=font, align='center')
-    return img
-
-def create_static_test_frame(width=320, height=240):
-    """Create a test pattern frame"""
-    img = Image.new('RGB', (width, height), (0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    
-    grid_size = 20
-    for x in range(0, width, grid_size):
-        for y in range(0, height, grid_size):
-            if (x // grid_size + y // grid_size) % 2 == 0:
-                color = (128, 128, 128)
-            else:
-                color = (64, 64, 64)
-            draw.rectangle([x, y, x + grid_size, y + grid_size], fill=color)
-    
-    try:
-        font = ImageFont.load_default()
-    except:
-        font = None
-    
-    text = "TEST PATTERN"
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    x = (width - text_width) // 2
-    y = height // 2
-    
-    draw.text((x, y), text, fill=(255, 255, 255), font=font)
-    return img
-
-def create_animated_test_frame(frame_num, total_frames=30, width=320, height=240):
-    """Create an animated test frame"""
-    img = Image.new('RGB', (width, height), (0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    
-    center_x, center_y = width // 2, height // 2
-    radius = min(width, height) // 3
-    
-    angle_offset = (frame_num / total_frames) * 360
-    
-    num_sectors = 8
-    for i in range(num_sectors):
-        angle = (i * 360 / num_sectors + angle_offset) % 360
-        hue = angle / 360
-        rgb = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
-        color = tuple(int(c * 255) for c in rgb)
+def auto_configure_tricorder_for_sacn(device_id: str, device_info: dict):
+    """Automatically configure a tricorder for sACN LED control when it connects"""
+    if not SACN_AVAILABLE:
+        return
         
-        start_angle = i * 360 / num_sectors
-        end_angle = (i + 1) * 360 / num_sectors
+    sacn_receiver = get_sacn_receiver()
+    if not sacn_receiver:
+        return
         
-        draw.pieslice([center_x - radius, center_y - radius, 
-                      center_x + radius, center_y + radius], 
-                     start_angle, end_angle, fill=color)
-    
+    # Configure tricorder to respond to RGB channels 1, 2, 3 for built-in LED
+    # and LED strip (if present)
     try:
-        font = ImageFont.load_default()
-    except:
-        font = None
-    
-    text = f"Frame {frame_num:03d}"
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    x = (width - text_width) // 2
-    y = height - 30
-    
-    draw.text((x, y), text, fill=(255, 255, 255), font=font)
-    return img
+        # Remove any existing configuration
+        sacn_receiver.remove_device(device_id)
+        
+        # Add device with RGB channels 1, 2, 3 for both built-in LED and LED strip
+        success = sacn_receiver.add_device(
+            device_id=device_id,
+            ip_address=device_info['ip_address'],
+            universe=CONFIG['sacn_universe'],  # Use configured universe
+            start_channel=1,  # Not used for uniform strip control
+            num_leds=3,  # Enable LED strip with 3 LEDs
+            builtin_led_channels=(1, 2, 3)  # RGB on channels 1, 2, 3 for both built-in and strip
+        )
+        
+        if success:
+            print(f"✅ Auto-configured {device_id} for sACN RGB control (channels 1,2,3 - built-in LED + LED strip)")
+        else:
+            print(f"⚠️ Failed to auto-configure {device_id} for sACN")
+            
+    except Exception as e:
+        print(f"❌ Error auto-configuring {device_id} for sACN: {e}")
 
 class TricorderServer:
     def __init__(self):
@@ -225,6 +165,15 @@ class TricorderServer:
             
             print(f"✓ Updated device: {device_id} at {addr[0]}")
             
+            # Auto-configure tricorder for sACN LED control (only if not already configured)
+            if device_id not in devices or 'sacn_configured' not in devices[device_id]:
+                print(f"🔧 Configuring {device_id} for sACN...")
+                auto_configure_tricorder_for_sacn(device_id, devices[device_id])
+                devices[device_id]['sacn_configured'] = True
+                print(f"✅ {device_id} sACN configuration complete")
+            else:
+                print(f"📝 {device_id} already configured for sACN")
+            
             # Broadcast to web clients
             socketio.emit('device_update', devices[device_id])
             print(f"📡 Emitted device_update for {device_id}")
@@ -277,11 +226,29 @@ def index():
                 <button onclick="refreshServerInfo()" style="background: #2196F3; margin-top: 10px;">🔄 Refresh Server Info</button>
             </div>
 
+
+            
             <div class="status">
-                <h2>ESP32 Simulator</h2>
-                <p>The simulator shows what appears on the ESP32 TFT display (320x240 ST7789)</p>
-                <div class="simulator">
-                    <button onclick="window.open('/simulator', '_blank')">Open Simulator</button>
+                <h2>📡 sACN Data Viewer</h2>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
+                    <div>
+                        <label for="sacnInterface"><strong>Network Interface:</strong></label>
+                        <select id="sacnInterface" style="width: 100%; padding: 8px; margin-top: 5px;" onchange="updateSACNInterface()">
+                            <option value="">Select Network Interface...</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="sacnUniverse"><strong>sACN Universe:</strong></label>
+                        <input type="number" id="sacnUniverse" min="1" max="63999" value="1" style="width: 100%; padding: 8px; margin-top: 5px;" onchange="updateSACNUniverse()">
+                    </div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <span id="sacnStatus" style="padding: 5px 10px; border-radius: 15px; background: #ff4444; color: white; font-size: 0.9em;">sACN Disconnected</span>
+                    <button onclick="toggleSACN()" id="sacnToggle" style="background: #4CAF50; margin-left: 10px;">Enable sACN</button>
+                    <button onclick="refreshSACNData()" style="background: #2196F3; margin-left: 10px;">Refresh Data</button>
+                </div>
+                <div id="sacnDataTable" style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px;">
+                    <p style="text-align: center; color: #666; padding: 20px;">Enable sACN and select a universe to view DMX data</p>
                 </div>
             </div>
             
@@ -334,6 +301,7 @@ def index():
                         ${device.firmware_version ? `<p><strong>Firmware:</strong> ${device.firmware_version}</p>` : ''}
                         ${device.free_heap ? `<p><strong>Free Heap:</strong> ${device.free_heap} bytes</p>` : ''}
                         ${device.video_playing ? `<p><strong>Video:</strong> ${device.current_video || 'Playing'} ${device.video_looping ? '(Looping)' : ''}</p>` : ''}
+                        <p><strong>🎭 sACN:</strong> <span style="color: #4CAF50;">RGB Channels 1,2,3 (Built-in LED + LED Strip)</span></p>
                         <div style="margin-top: 10px;">
                             <strong>📺 Image Controls:</strong><br>
                             <button onclick="sendBootScreen('${device.device_id}')">Play Startup</button>
@@ -350,6 +318,8 @@ def index():
                             <button onclick="sendLEDColor('${device.device_id}', 0, 255, 255)" style="background: #44ffff; color: black; margin: 2px;">🔵 Cyan</button>
                             <button onclick="sendLEDColor('${device.device_id}', 255, 255, 255)" style="background: #ffffff; color: black; margin: 2px;">⚪ White</button>
                             <button onclick="sendLEDColor('${device.device_id}', 0, 0, 0)" style="background: #666666; margin: 2px;">⚫ Off</button>
+                            <br>
+                            <button onclick="sendDiagnostic('${device.device_id}')" style="background: #ff9900; margin: 2px;">🔧 LED Diagnostic</button>
                             <br><br>
                             <button onclick="sendCommand('${device.device_id}', 'stop_video', '')">Stop Video</button>
                         </div>
@@ -405,6 +375,8 @@ def index():
                 window.lastLEDCommand = now;
                 
                 console.log(`Setting LED color for ${deviceId} to RGB(${r}, ${g}, ${b})`);
+                
+                // Send built-in LED command
                 fetch('/api/command', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -420,14 +392,63 @@ def index():
                 })
                 .then(response => response.json())
                 .then(data => {
-                    console.log('LED command response:', data);
+                    console.log('Built-in LED command response:', data);
                     if (data.status === 'sent') {
-                        console.log(`✅ LED color command sent to ${deviceId}`);
+                        console.log(`✅ Built-in LED color command sent to ${deviceId}`);
                     }
                 })
                 .catch(error => {
-                    console.error('LED command error:', error);
-                    alert('Failed to send LED color command');
+                    console.error('Built-in LED command error:', error);
+                });
+                
+                // Also send LED strip command
+                fetch('/api/command', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        device_id: deviceId,
+                        action: 'set_led_color',
+                        parameters: {
+                            r: r,
+                            g: g,
+                            b: b
+                        }
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('LED strip command response:', data);
+                    if (data.status === 'sent') {
+                        console.log(`✅ LED strip color command sent to ${deviceId}`);
+                    }
+                })
+                .catch(error => {
+                    console.error('LED strip command error:', error);
+                });
+            }
+            
+            function sendDiagnostic(deviceId) {
+                console.log(`Running LED diagnostic for ${deviceId}`);
+                
+                fetch('/api/command', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        device_id: deviceId,
+                        action: 'led_diagnostic',
+                        parameters: {}
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('LED diagnostic response:', data);
+                    if (data.status === 'sent') {
+                        console.log(`✅ LED diagnostic command sent to ${deviceId}`);
+                        alert('LED diagnostic started! Check the device LEDs and server console for details.');
+                    }
+                })
+                .catch(error => {
+                    console.error('LED diagnostic error:', error);
                 });
             }
             
@@ -519,180 +540,247 @@ def index():
             
             // Load devices on page load
             window.addEventListener('load', loadDevices);
+            
+            // sACN Control Functions
+            let sacnEnabled = false;
+            
+            // Load network interfaces when page loads
+            window.addEventListener('load', function() {
+                loadDevices();
+                loadNetworkInterfaces();
+                updateSACNStatus();
+                setInterval(updateSACNStatus, 5000); // Update sACN status every 5 seconds
+                setInterval(() => {
+                    if (sacnEnabled) {
+                        refreshSACNData();
+                    }
+                }, 2000); // Refresh sACN data every 2 seconds when enabled
+            });
+            
+            function loadNetworkInterfaces() {
+                fetch('/api/sacn/interfaces')
+                .then(response => response.json())
+                .then(data => {
+                    const select = document.getElementById('sacnInterface');
+                    select.innerHTML = '<option value="">Select Network Interface...</option>';
+                    
+                    if (data.interfaces) {
+                        data.interfaces.forEach(iface => {
+                            const option = document.createElement('option');
+                            option.value = iface.name;
+                            option.textContent = `${iface.name} (${iface.ip})`;
+                            if (iface.default) {
+                                option.selected = true;
+                            }
+                            select.appendChild(option);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Failed to load network interfaces:', error);
+                });
+            }
+            
+            function updateSACNStatus() {
+                fetch('/api/sacn/status')
+                .then(response => response.json())
+                .then(data => {
+                    const statusElement = document.getElementById('sacnStatus');
+                    const toggleButton = document.getElementById('sacnToggle');
+                    
+                    sacnEnabled = data.running || false;
+                    
+                    if (sacnEnabled) {
+                        statusElement.textContent = `sACN Receiver Running`;
+                        statusElement.style.background = '#4CAF50';
+                        toggleButton.textContent = 'Disable sACN';
+                        toggleButton.style.background = '#f44336';
+                    } else {
+                        statusElement.textContent = 'sACN Receiver Stopped';
+                        statusElement.style.background = '#ff4444';
+                        toggleButton.textContent = 'Enable sACN';
+                        toggleButton.style.background = '#4CAF50';
+                    }
+                })
+                .catch(error => {
+                    console.error('Failed to update sACN status:', error);
+                });
+            }
+            
+            function refreshSACNData() {
+                const universe = parseInt(document.getElementById('sacnUniverse').value) || 1;
+                
+                fetch(`/api/sacn/universe/${universe}/data`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById('sacnDataTable').innerHTML = 
+                            `<p style="text-align: center; color: #ff4444; padding: 20px;">${data.error}</p>`;
+                        return;
+                    }
+                    
+                    let tableHTML = `
+                        <div style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+                            <strong>🎭 Tricorder RGB Control:</strong>
+                            <div style="display: inline-block; margin-left: 15px;">
+                                <span style="background: #ff4444; color: white; padding: 2px 8px; border-radius: 3px; margin-right: 5px;">
+                                    Ch1 (Red): ${data.data[0] || 0}
+                                </span>
+                                <span style="background: #44ff44; color: black; padding: 2px 8px; border-radius: 3px; margin-right: 5px;">
+                                    Ch2 (Green): ${data.data[1] || 0}
+                                </span>
+                                <span style="background: #4444ff; color: white; padding: 2px 8px; border-radius: 3px;">
+                                    Ch3 (Blue): ${data.data[2] || 0}
+                                </span>
+                            </div>
+                        </div>
+                        <table style="width: 100%; border-collapse: collapse; font-family: monospace; font-size: 12px;">
+                            <thead>
+                                <tr style="background: #f5f5f5; position: sticky; top: 0;">
+                                    <th style="border: 1px solid #ddd; padding: 8px;">Channel</th>
+                                    <th style="border: 1px solid #ddd; padding: 8px;">Value</th>
+                                    <th style="border: 1px solid #ddd; padding: 8px;">Hex</th>
+                                    <th style="border: 1px solid #ddd; padding: 8px;">%</th>
+                                    <th style="border: 1px solid #ddd; padding: 8px;">Color</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+                    
+                    for (let i = 0; i < Math.min(data.data.length, 100); i++) {
+                        const value = data.data[i];
+                        const percentage = Math.round((value / 255) * 100);
+                        const hex = value.toString(16).padStart(2, '0').toUpperCase();
+                        const grayValue = Math.round((value / 255) * 255);
+                        
+                        // Highlight RGB control channels (1, 2, 3)
+                        const isRgbChannel = (i + 1) <= 3;
+                        const channelBg = isRgbChannel ? 
+                            (i === 0 ? '#ffe6e6' : i === 1 ? '#e6ffe6' : '#e6e6ff') : 
+                            (value > 0 ? '#f0f8ff' : '');
+                        const channelLabel = isRgbChannel ? 
+                            (i === 0 ? ' (R)' : i === 1 ? ' (G)' : ' (B)') : '';
+                        
+                        tableHTML += `
+                            <tr style="background: ${channelBg};">
+                                <td style="border: 1px solid #ddd; padding: 4px; text-align: center; font-weight: ${isRgbChannel ? 'bold' : 'normal'};">${i + 1}${channelLabel}</td>
+                                <td style="border: 1px solid #ddd; padding: 4px; text-align: center; font-weight: ${value > 0 ? 'bold' : 'normal'};">${value}</td>
+                                <td style="border: 1px solid #ddd; padding: 4px; text-align: center;">${hex}</td>
+                                <td style="border: 1px solid #ddd; padding: 4px; text-align: center;">${percentage}%</td>
+                                <td style="border: 1px solid #ddd; padding: 4px;">
+                                    <div style="width: 20px; height: 16px; background: rgb(${grayValue},${grayValue},${grayValue}); border: 1px solid #ccc;"></div>
+                                </td>
+                            </tr>
+                        `;
+                    }
+                    
+                    tableHTML += `
+                            </tbody>
+                        </table>
+                        <p style="text-align: center; margin: 10px; color: #666; font-size: 11px;">
+                            Universe ${universe} - Showing channels 1-${Math.min(data.data.length, 100)} of ${data.channels} total
+                        </p>
+                    `;
+                    
+                    document.getElementById('sacnDataTable').innerHTML = tableHTML;
+                })
+                .catch(error => {
+                    console.error('Failed to refresh sACN data:', error);
+                    document.getElementById('sacnDataTable').innerHTML = 
+                        '<p style="text-align: center; color: #ff4444; padding: 20px;">Failed to load sACN data</p>';
+                });
+            }
+            
+            function updateSACNInterface() {
+                const interface = document.getElementById('sacnInterface').value;
+                if (!interface) return;
+                
+                fetch('/api/sacn/interface', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ interface: interface })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log('sACN interface updated:', interface);
+                        updateSACNStatus();
+                    } else {
+                        alert('Failed to update sACN interface: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Failed to update sACN interface:', error);
+                    alert('Failed to update sACN interface');
+                });
+            }
+            
+            function updateSACNUniverse() {
+                const universe = parseInt(document.getElementById('sacnUniverse').value);
+                if (isNaN(universe) || universe < 1 || universe > 63999) {
+                    alert('Universe must be between 1 and 63999');
+                    return;
+                }
+                
+                fetch('/api/sacn/universe', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ universe: universe })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log('sACN universe updated:', universe);
+                        updateSACNStatus();
+                    } else {
+                        alert('Failed to update sACN universe: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Failed to update sACN universe:', error);
+                    alert('Failed to update sACN universe');
+                });
+            }
+            
+            function toggleSACN() {
+                const networkInterface = document.getElementById('networkInterface').value;
+                const universe = parseInt(document.getElementById('sacnUniverse').value) || 1;
+                
+                if (!networkInterface) {
+                    alert('Please select a network interface');
+                    return;
+                }
+                
+                if (universe < 1 || universe > 63999) {
+                    alert('Universe must be between 1 and 63999');
+                    return;
+                }
+                
+                fetch('/api/sacn/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        interface: networkInterface,
+                        universe: universe
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    updateSACNStatus();
+                    if (data.running) {
+                        refreshSACNData();
+                        console.log('✅ sACN enabled - Tricorders will respond to RGB channels 1,2,3');
+                    } else {
+                        document.getElementById('sacnDataTable').innerHTML = 
+                            '<p style="text-align: center; color: #666; padding: 20px;">sACN receiver stopped</p>';
+                    }
+                })
+                .catch(error => console.error('sACN toggle error:', error));
+            }
         </script>
     </body>
     </html>
     '''
-
-@app.route('/simulator')
-def simulator():
-    """ESP32 simulator page"""
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>ESP32 Display Simulator</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; text-align: center; }
-            .simulator { background: #000; padding: 20px; border-radius: 10px; display: inline-block; margin: 20px; }
-            canvas { border: 2px solid #333; transform: scale(2); transform-origin: center; }
-            .controls { margin: 20px; }
-            button { background: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin: 2px; }
-            select { padding: 8px; margin: 5px; }
-        </style>
-    </head>
-    <body>
-        <h1>ESP32 Display Simulator (ST7789 320x240)</h1>
-        
-        <div class="simulator">
-            <canvas id="display" width="320" height="240"></canvas>
-        </div>
-        
-        <div class="controls">
-            <select id="videoSelect">
-                <option value="">Select video...</option>
-                <option value="startup.jpg">Startup</option>
-                <option value="static_test.jpg">Test Pattern</option>
-                <option value="color_red.jpg">Red</option>
-                <option value="color_green.jpg">Green</option>
-                <option value="color_blue.jpg">Blue</option>
-                <option value="color_cyan.jpg">Cyan</option>
-                <option value="color_magenta.jpg">Magenta</option>
-                <option value="color_yellow.jpg">Yellow</option>
-                <option value="color_white.jpg">White</option>
-                <option value="animated_test">Animated Test (30 frames)</option>
-            </select>
-            <br>
-            <button onclick="playVideo()">Play</button>
-            <button onclick="stopVideo()">Stop</button>
-            <button onclick="clearScreen()">Clear</button>
-        </div>
-        
-        <p>This simulator shows exactly what appears on the ESP32 TFT display.</p>
-        
-        <script>
-            const canvas = document.getElementById('display');
-            const ctx = canvas.getContext('2d');
-            const videoSelect = document.getElementById('videoSelect');
-            let animationInterval = null;
-            let currentFrame = 0;
-            
-            // Initialize with black screen
-            ctx.fillStyle = '#000000';
-            ctx.fillRect(0, 0, 320, 240);
-            ctx.fillStyle = '#00ff00';
-            ctx.font = '16px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText('ESP32 Simulator Ready', 160, 120);
-            
-            function playVideo() {
-                const video = videoSelect.value;
-                if (!video) return;
-                
-                stopVideo(); // Stop any current animation
-                
-                if (video === 'animated_test') {
-                    playAnimatedSequence();
-                } else {
-                    displayFrame(video);
-                }
-            }
-            
-            function displayFrame(filename) {
-                const img = new Image();
-                img.onload = function() {
-                    ctx.drawImage(img, 0, 0, 320, 240);
-                };
-                img.onerror = function() {
-                    // Fallback for missing images
-                    ctx.fillStyle = '#ff0000';
-                    ctx.fillRect(0, 0, 320, 240);
-                    ctx.fillStyle = '#ffffff';
-                    ctx.font = '16px monospace';
-                    ctx.textAlign = 'center';
-                    ctx.fillText('Frame Missing', 160, 120);
-                };
-                img.src = '/api/simulator/frames/' + filename;
-            }
-            
-            function playAnimatedSequence() {
-                currentFrame = 0;
-                animationInterval = setInterval(() => {
-                    const filename = 'animated_test_frame_' + String(currentFrame + 1).padStart(3, '0') + '.jpg';
-                    displayFrame(filename);
-                    currentFrame = (currentFrame + 1) % 30;
-                }, 66); // ~15 FPS
-            }
-            
-            function stopVideo() {
-                if (animationInterval) {
-                    clearInterval(animationInterval);
-                    animationInterval = null;
-                }
-            }
-            
-            function clearScreen() {
-                stopVideo();
-                ctx.fillStyle = '#000000';
-                ctx.fillRect(0, 0, 320, 240);
-            }
-        </script>
-    </body>
-    </html>
-    '''
-
-@app.route('/api/simulator/frames/<filename>')
-def serve_frame(filename):
-    """Serve a frame image for the simulator"""
-    try:
-        width, height = 320, 240
-        
-        if filename.startswith('color_'):
-            color_name = filename.replace('color_', '').replace('.jpg', '')
-            img = create_color_frame(color_name, width, height)
-            
-        elif filename == 'startup.jpg':
-            img = create_startup_frame(width, height)
-            
-        elif filename == 'startup_mid.jpg':
-            img = create_startup_frame(width, height)
-            img = Image.eval(img, lambda x: int(x * 0.7))
-            
-        elif filename == 'static_test.jpg':
-            img = create_static_test_frame(width, height)
-            
-        elif filename.startswith('animated_test_frame_'):
-            frame_str = filename.replace('animated_test_frame_', '').replace('.jpg', '')
-            frame_num = int(frame_str)
-            img = create_animated_test_frame(frame_num, 30, width, height)
-            
-        else:
-            img = Image.new('RGB', (width, height), (32, 32, 32))
-            draw = ImageDraw.Draw(img)
-            
-            try:
-                font = ImageFont.load_default()
-            except:
-                font = None
-            
-            text = f"Missing:\n{filename}"
-            bbox = draw.textbbox((0, 0), text, font=font)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            x = (width - text_width) // 2
-            y = (height - text_height) // 2
-            
-            draw.text((x, y), text, fill=(255, 128, 128), font=font, align='center')
-        
-        img_io = io.BytesIO()
-        img.save(img_io, 'JPEG', quality=85)
-        img_io.seek(0)
-        
-        return send_file(img_io, mimetype='image/jpeg')
-        
-    except Exception as e:
-        print(f"Error serving frame {filename}: {e}")
-        abort(404)
 
 @app.route('/api/devices')
 def get_devices():
@@ -801,6 +889,42 @@ def add_device():
         print(f"❌ Add device error: {e}")
         return jsonify({'error': str(e)}), 500
 
+def send_udp_command_to_device(device_id: str, action: str, parameters: dict, command_id: Optional[str] = None):
+    """
+    Utility function to send UDP command to a device
+    """
+    if command_id is None:
+        command_id = str(uuid.uuid4())
+        
+    if device_id not in devices:
+        return False
+        
+    device = devices[device_id]
+    
+    # Create command in format ESP32 expects
+    esp32_command = {
+        'commandId': command_id,
+        'action': action,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    if parameters:
+        esp32_command['parameters'] = parameters
+        
+    try:
+        # Send UDP command
+        command_json = json.dumps(esp32_command)
+        if server.udp_socket:
+            server.udp_socket.sendto(
+                command_json.encode('utf-8'),
+                (device['ip_address'], CONFIG['udp_port'])
+            )
+        print(f"Sent UDP command to {device_id}: {action}")
+        return True
+    except Exception as e:
+        print(f"Failed to send UDP command to {device_id}: {e}")
+        return False
+
 @app.route('/api/command', methods=['POST'])
 def send_command():
     """Send command to device"""
@@ -865,6 +989,305 @@ def send_command():
         print(f"Command error: {e}")
         return jsonify({'error': str(e)}), 500
 
+# ==========================================
+# sACN (E1.31) API Endpoints
+# ==========================================
+
+@app.route('/api/sacn/status', methods=['GET'])
+def sacn_status():
+    """Get sACN receiver status"""
+    sacn_receiver = get_sacn_receiver()
+    if not sacn_receiver:
+        return jsonify({
+            'enabled': False,
+            'available': SACN_AVAILABLE,
+            'error': 'sACN receiver not initialized'
+        })
+    
+    return jsonify({
+        'enabled': True,
+        'available': SACN_AVAILABLE,
+        **sacn_receiver.get_status()
+    })
+
+@app.route('/api/sacn/device', methods=['POST'])
+def sacn_add_device():
+    """Add device to sACN control"""
+    sacn_receiver = get_sacn_receiver()
+    if not sacn_receiver:
+        return jsonify({'error': 'sACN receiver not available'}), 400
+    
+    try:
+        data = request.get_json()
+        device_id = data.get('device_id')
+        ip_address = data.get('ip_address')
+        universe = data.get('universe', CONFIG['sacn_universe'])
+        start_channel = data.get('start_channel', 1)
+        num_leds = data.get('num_leds', 3)
+        builtin_led_channels = data.get('builtin_led_channels')  # [r, g, b] channels
+        
+        if not device_id or not ip_address:
+            return jsonify({'error': 'Missing device_id or ip_address'}), 400
+        
+        # Convert to tuple if provided
+        if builtin_led_channels and len(builtin_led_channels) == 3:
+            builtin_led_channels = tuple(builtin_led_channels)
+        else:
+            builtin_led_channels = None
+            
+        success = sacn_receiver.add_device(
+            device_id, ip_address, universe, start_channel, 
+            num_leds, builtin_led_channels
+        )
+        
+        if success:
+            return jsonify({'message': f'Device {device_id} added to sACN control'})
+        else:
+            return jsonify({'error': 'Failed to add device to sACN'}), 400
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/sacn/device/<device_id>', methods=['DELETE'])
+def sacn_remove_device(device_id):
+    """Remove device from sACN control"""
+    sacn_receiver = get_sacn_receiver()
+    if not sacn_receiver:
+        return jsonify({'error': 'sACN receiver not available'}), 400
+    
+    success = sacn_receiver.remove_device(device_id)
+    if success:
+        return jsonify({'message': f'Device {device_id} removed from sACN control'})
+    else:
+        return jsonify({'error': 'Device not found'}), 404
+
+@app.route('/api/sacn/universe/<int:universe>/data', methods=['GET'])
+def sacn_get_universe_data(universe):
+    """Get current DMX data for a universe"""
+    sacn_receiver = get_sacn_receiver()
+    if not sacn_receiver:
+        return jsonify({'error': 'sACN receiver not available'}), 400
+    
+    dmx_data = sacn_receiver.get_universe_data(universe)
+    if dmx_data is None:
+        return jsonify({'error': f'No data received for universe {universe}'}), 404
+    
+    return jsonify({
+        'universe': universe,
+        'channels': len(dmx_data),
+        'data': dmx_data[:50]  # Return first 50 channels to avoid huge responses
+    })
+
+# Note: Color and effect control endpoints removed since we are now a receiver
+# Colors and effects are controlled by lighting consoles sending sACN data
+# The receiver automatically forwards received DMX data to tricorder devices
+
+# === Main Application Routes ===
+
+# Additional sACN API endpoints for integrated control
+@app.route('/api/sacn/interfaces')
+def get_network_interfaces():
+    """Get available network interfaces for sACN"""
+    try:
+        if psutil is None:
+            # Fallback if psutil is not available
+            return jsonify({
+                'success': True,
+                'interfaces': [{
+                    'name': 'Default',
+                    'ip': get_server_ip(),
+                    'default': True
+                }]
+            })
+            
+        interfaces = []
+        
+        for interface_name, addresses in psutil.net_if_addrs().items():
+            for addr in addresses:
+                if addr.family == socket.AF_INET and not addr.address.startswith('127.'):
+                    interfaces.append({
+                        'name': interface_name,
+                        'ip': addr.address,
+                        'default': addr.address == get_server_ip()
+                    })
+                    break
+        
+        return jsonify({
+            'success': True,
+            'interfaces': interfaces
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+@app.route('/api/sacn/interface', methods=['POST'])
+def set_sacn_interface():
+    """Set the network interface for sACN receiver"""
+    try:
+        data = request.get_json()
+        interface = data.get('interface')
+        
+        if not interface:
+            return jsonify({'success': False, 'message': 'Interface name required'})
+        
+        # For sACN receiver, interface is set during initialization
+        # This would require restarting the receiver with new interface
+        # For now, just acknowledge the request
+        return jsonify({
+            'success': True,
+            'message': f'Interface setting noted: {interface} (requires receiver restart)'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+@app.route('/api/sacn/universe', methods=['POST'])
+def set_sacn_universe():
+    """Set the sACN universe"""
+    try:
+        data = request.get_json()
+        universe = data.get('universe', 1)
+        
+        if not isinstance(universe, int) or universe < 1 or universe > 63999:
+            return jsonify({'success': False, 'message': 'Universe must be between 1 and 63999'})
+        
+        # Update configuration
+        CONFIG['sacn_universe'] = universe
+        
+        # For receiver, devices can be configured for different universes
+        # No need to restart receiver, just note the configuration
+        return jsonify({
+            'success': True,
+            'message': f'Default universe set to {universe}'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+@app.route('/api/sacn/toggle', methods=['POST'])
+def toggle_sacn():
+    """Toggle sACN receiver with interface and universe configuration"""
+    try:
+        data = request.get_json()
+        interface = data.get('interface')
+        universe = data.get('universe', 1)
+        
+        if not SACN_AVAILABLE:
+            return jsonify({
+                'success': False,
+                'message': 'sACN receiver not available'
+            })
+        
+        receiver = get_sacn_receiver()
+        
+        # If receiver is running, stop it
+        if receiver and receiver.running:
+            receiver.stop()
+            return jsonify({
+                'success': True,
+                'running': False,
+                'message': 'sACN receiver stopped'
+            })
+        else:
+            # Start or restart receiver
+            if not receiver:
+                receiver = initialize_sacn_receiver("0.0.0.0")
+                # Set command callback
+                def sacn_command_callback(device_id: str, action: str, params: dict):
+                    command_id = str(uuid.uuid4())
+                    send_udp_command_to_device(device_id, action, params, command_id)
+                set_command_callback(sacn_command_callback)
+            
+            # Update universe configuration
+            CONFIG['sacn_universe'] = universe
+            
+            if receiver.start():
+                # Re-configure all connected tricorders for the new universe
+                for device_id, device_info in devices.items():
+                    auto_configure_tricorder_for_sacn(device_id, device_info)
+                
+                return jsonify({
+                    'success': True,
+                    'running': True,
+                    'universe': universe,
+                    'interface': interface,
+                    'message': f'sACN receiver started on universe {universe}'
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'running': False,
+                    'message': 'Failed to start sACN receiver'
+                })
+                
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+@app.route('/api/sacn/enable', methods=['POST'])
+def enable_sacn():
+    """Enable sACN receiver"""
+    try:
+        if not SACN_AVAILABLE:
+            return jsonify({
+                'success': False,
+                'message': 'sACN receiver not available'
+            })
+        
+        receiver = get_sacn_receiver()
+        if not receiver:
+            # Initialize receiver if not already done
+            receiver = initialize_sacn_receiver("0.0.0.0")
+            # Set command callback
+            def sacn_command_callback(device_id: str, action: str, params: dict):
+                command_id = str(uuid.uuid4())
+                send_udp_command_to_device(device_id, action, params, command_id)
+            set_command_callback(sacn_command_callback)
+        
+        if receiver:
+            receiver.start()
+            return jsonify({
+                'success': True,
+                'message': 'sACN receiver enabled'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to initialize sACN receiver'
+            })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+@app.route('/api/sacn/disable', methods=['POST'])
+def disable_sacn():
+    """Disable sACN receiver"""
+    try:
+        if SACN_AVAILABLE:
+            receiver = get_sacn_receiver()
+            if receiver:
+                receiver.stop()
+        
+        return jsonify({
+            'success': True,
+            'message': 'sACN receiver disabled'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
@@ -881,10 +1304,30 @@ def run_udp_server():
     server.start_udp_listener()
 
 if __name__ == '__main__':
-    print("Starting Enhanced Tricorder Control Server with ESP32 Simulator...")
+    print("Starting Tricorder Control Server with sACN Data Viewer...")
     print(f"Web interface: http://localhost:{CONFIG['web_port']}")
-    print(f"ESP32 Simulator: http://localhost:{CONFIG['web_port']}/simulator")
     print(f"UDP listener: port {CONFIG['udp_port']}")
+    
+    # Initialize sACN receiver if enabled
+    if CONFIG['sacn_enabled'] and SACN_AVAILABLE:
+        sacn_receiver = initialize_sacn_receiver("0.0.0.0")  # Listen on all interfaces
+        
+        # Set command callback to send commands to devices
+        def sacn_command_callback(device_id: str, action: str, params: dict):
+            """Send sACN-received commands to tricorder devices via UDP"""
+            command_id = str(uuid.uuid4())
+            send_udp_command_to_device(device_id, action, params, command_id)
+        
+        set_command_callback(sacn_command_callback)
+        
+        if sacn_receiver.start():
+            print(f"sACN receiver started on port 5568")
+        else:
+            print("Failed to start sACN receiver - using UDP only")
+    else:
+        if CONFIG['sacn_enabled']:
+            print("sACN library not available - install with: pip install sacn")
+        print("sACN disabled - using UDP only")
     
     # Start UDP server in background
     udp_thread = threading.Thread(target=run_udp_server, daemon=True)

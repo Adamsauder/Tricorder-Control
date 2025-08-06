@@ -18,6 +18,7 @@
 #define LED_PIN 21         // NeoPixel data pin (external connection) - IO21
 #define NUM_LEDS 3         // Number of NeoPixels in strip (3 front LEDs)
 #define TFT_BL 27          // TFT backlight pin
+#define LED_POWER_EN 22    // LED strip power enable pin (DC-DC converter)
 
 // SD Card pins (typical SPI configuration for ESP32-2432S032C)
 #define SD_CS 5            // SD card chip select
@@ -38,6 +39,8 @@
 const char* WIFI_SSID = "Rigging Electric";
 const char* WIFI_PASSWORD = "academy123";
 const int UDP_PORT = 8888;
+const int SACN_PORT = 5568;
+const int SACN_UNIVERSE = 1;
 
 // Device identification
 String deviceId = "TRICORDER_001";
@@ -70,6 +73,10 @@ int totalFrames = 1;
 String frameFiles[30]; // Store up to 30 frame files
 bool isAnimatedSequence = false;
 
+// Timing variables
+unsigned long lastStatusSend = 0;
+const unsigned long STATUS_INTERVAL = 10000; // Send status every 10 seconds
+
 // Video frame callback
 int JPEGDraw(JPEGDRAW *pDraw) {
   // Draw the JPEG frame to the TFT display
@@ -87,6 +94,7 @@ void pulseEffect(int r, int g, int b, int duration = 2000);
 void setBuiltinLED(int r, int g, int b);
 void sendResponse(String commandId, String result);
 void sendStatus(String commandId);
+void sendPeriodicStatus();
 bool initializeSDCard();
 bool playVideo(String filename, bool loop = false);
 void stopVideo();
@@ -136,6 +144,12 @@ void setup() {
   
   Serial.printf("Final buffer size: %d bytes\n", actualBufferSize);
   Serial.printf("Free heap after buffer allocation: %d bytes\n", ESP.getFreeHeap());
+  
+  // Enable LED strip power (DC-DC converter)
+  pinMode(LED_POWER_EN, OUTPUT);
+  digitalWrite(LED_POWER_EN, HIGH);  // Enable power to LED strip
+  Serial.println("LED power enabled (pin 22)");
+  delay(100); // Allow power to stabilize
   
   // Initialize LEDs
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
@@ -351,10 +365,10 @@ void setup() {
   
   delay(1000); // Show status briefly
   
-  // Set initial LED state to white (standby look)
-  fill_solid(leds, NUM_LEDS, CRGB::White);
+  // Set initial LED state to blue (standby look)
+  fill_solid(leds, NUM_LEDS, CRGB::Blue);
   FastLED.show();
-  Serial.println("LEDs set to white standby mode");
+  Serial.println("LEDs set to blue standby mode");
   
   Serial.println("Setup complete!");
 }
@@ -368,13 +382,20 @@ void loop() {
     updateVideoPlayback();
   }
   
+  // Send periodic status to server (every 10 seconds)
+  unsigned long currentTime = millis();
+  if (wifiConnected && (currentTime - lastStatusSend > STATUS_INTERVAL)) {
+    sendPeriodicStatus();
+    lastStatusSend = currentTime;
+  }
+  
   // Check WiFi connection
   if (WiFi.status() != WL_CONNECTED && wifiConnected) {
     wifiConnected = false;
     Serial.println("WiFi disconnected!");
   }
   
-  delay(10);
+  delay(1);  // Reduced from 10ms to 1ms for faster response
 }
 
 void handleUDPCommands() {
@@ -385,8 +406,6 @@ void handleUDPCommands() {
     if (len > 0) {
       incomingPacket[len] = 0;
     }
-    
-    Serial.printf("Received UDP packet: %s\n", incomingPacket);
     
     // Parse JSON command
     JsonDocument doc;
@@ -466,6 +485,54 @@ void handleUDPCommands() {
         int duration = doc["parameters"]["duration"].as<int>() || 2000;
         pulseEffect(r, g, b, duration);
         sendResponse(commandId, "Pulse effect executed");
+      }
+      else if (action == "led_diagnostic") {
+        // LED diagnostic command to help troubleshoot
+        Serial.println("=== LED DIAGNOSTIC ===");
+        Serial.printf("NUM_LEDS: %d\n", NUM_LEDS);
+        Serial.printf("LED_PIN: %d\n", LED_PIN);
+        Serial.printf("Current brightness: %d\n", ledBrightness);
+        Serial.printf("Current color: R:%d G:%d B:%d\n", currentColor.r, currentColor.g, currentColor.b);
+        
+        // Test sequence
+        Serial.println("Testing LEDs with sequence...");
+        
+        // Clear all LEDs
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        FastLED.show();
+        delay(200);  // Reduced from 500ms
+        
+        // Test each LED individually
+        for (int i = 0; i < NUM_LEDS; i++) {
+          Serial.printf("Testing LED %d - RED\n", i);
+          fill_solid(leds, NUM_LEDS, CRGB::Black);
+          leds[i] = CRGB::Red;
+          FastLED.show();
+          delay(500);  // Reduced from 1000ms
+          
+          Serial.printf("Testing LED %d - GREEN\n", i);
+          leds[i] = CRGB::Green;
+          FastLED.show();
+          delay(500);  // Reduced from 1000ms
+          
+          Serial.printf("Testing LED %d - BLUE\n", i);
+          leds[i] = CRGB::Blue;
+          FastLED.show();
+          delay(500);  // Reduced from 1000ms
+        }
+        
+        // Test all LEDs together
+        Serial.println("Testing all LEDs - WHITE");
+        fill_solid(leds, NUM_LEDS, CRGB::White);
+        FastLED.show();
+        delay(1000);  // Reduced from 2000ms
+        
+        // Return to black
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        FastLED.show();
+        
+        Serial.println("=== LED DIAGNOSTIC COMPLETE ===");
+        sendResponse(commandId, "LED diagnostic complete - check Serial monitor for details");
       }
       else if (action == "set_builtin_led") {
         int r = doc["parameters"]["r"];
@@ -565,7 +632,6 @@ void setLEDColor(int r, int g, int b) {
   currentColor = CRGB(r, g, b);
   fill_solid(leds, NUM_LEDS, currentColor);
   FastLED.show();
-  Serial.printf("LED color set to R:%d G:%d B:%d\n", r, g, b);
 }
 
 void setLEDBrightness(int brightness) {
@@ -638,8 +704,6 @@ void sendResponse(String commandId, String result) {
   udp.beginPacket(udp.remoteIP(), udp.remotePort());
   udp.write((const uint8_t*)response.c_str(), response.length());
   udp.endPacket();
-  
-  Serial.printf("Sent response: %s\n", response.c_str());
 }
 
 void sendStatus(String commandId) {
@@ -665,6 +729,34 @@ void sendStatus(String commandId) {
   udp.endPacket();
   
   Serial.printf("Sent status: %s\n", response.c_str());
+}
+
+void sendPeriodicStatus() {
+  // Send periodic status to server (broadcast to server IP)
+  JsonDocument doc;
+  doc["deviceId"] = deviceId;
+  doc["firmwareVersion"] = firmwareVersion;
+  doc["wifiConnected"] = wifiConnected;
+  doc["ipAddress"] = WiFi.localIP().toString();
+  doc["freeHeap"] = ESP.getFreeHeap();
+  doc["uptime"] = millis();
+  doc["sdCardInitialized"] = sdCardInitialized;
+  doc["videoPlaying"] = videoPlaying;
+  doc["currentVideo"] = currentVideo;
+  doc["videoLooping"] = videoLooping;
+  doc["currentFrame"] = currentFrame;
+  doc["timestamp"] = millis();
+  
+  String statusMsg;
+  serializeJson(doc, statusMsg);
+  
+  // Broadcast to server subnet (try a few common server IPs)
+  IPAddress localIP = WiFi.localIP();
+  IPAddress serverIP(localIP[0], localIP[1], localIP[2], 24); // Usually .24 for server
+  
+  udp.beginPacket(serverIP, UDP_PORT);
+  udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
+  udp.endPacket();
 }
 
 void setBuiltinLED(int r, int g, int b) {

@@ -34,6 +34,12 @@
 #define RGB_LED_G 16       // Green channel  
 #define RGB_LED_B 17       // Blue channel
 
+// Battery monitoring
+#define BATTERY_PIN 39     // ADC pin for battery voltage (ADC1_CH3) - GPIO39 (was GPIO34)
+#define BATTERY_VOLTAGE_DIVIDER 82.0  // Actual measured voltage divider ratio (4.1V battery → 0.05V ADC)
+#define BATTERY_MAX_VOLTAGE 4.2      // Maximum battery voltage (for 100%)
+#define BATTERY_MIN_VOLTAGE 3.0      // Minimum battery voltage (for 0%)
+
 // Video playback settings
 #define FRAME_DELAY_MS 33  // ~30 FPS (1000ms / 30)
 #define VIDEO_BUFFER_SIZE 65536  // 64KB buffer - reduced from 128KB due to ESP32 memory constraints
@@ -87,7 +93,7 @@ struct NetworkCommand {
 struct VideoCommand {
   enum Type { PLAY_VIDEO, DISPLAY_IMAGE, STOP_VIDEO };
   Type type;
-  String filename;
+  char filename[64];  // Fixed-size char array instead of String
   bool loop;
 };
 
@@ -145,6 +151,12 @@ void showVideoFrame();
 bool displayStaticImage(String filename);
 bool displayBootImage(String filename);
 void displayInitializationScreen();
+
+// Battery monitoring functions
+float readBatteryVoltage();
+int getBatteryPercentage();
+String getBatteryStatus();
+void initializeBatteryMonitoring();
 
 // Dual-core task functions
 void ledTask(void *pvParameters);
@@ -206,6 +218,9 @@ void setup() {
   pinMode(RGB_LED_R, OUTPUT);
   pinMode(RGB_LED_G, OUTPUT);
   pinMode(RGB_LED_B, OUTPUT);
+  
+  // Initialize battery monitoring
+  initializeBatteryMonitoring();
   
   // Set built-in LED to blue during boot
   setBuiltinLED(0, 0, 255);
@@ -607,16 +622,23 @@ void videoTask(void *pvParameters) {
   while (true) {
     // Wait for video commands
     if (xQueueReceive(videoCommandQueue, &command, 100) == pdPASS) {
+      Serial.printf("Video Task received command type: %d, filename: %s\n", command.type, command.filename);
       switch (command.type) {
         case VideoCommand::PLAY_VIDEO:
-          playVideo(command.filename, command.loop);
+          Serial.printf("Video Task: Starting video playback: %s\n", command.filename);
+          playVideo(String(command.filename), command.loop);
           break;
           
         case VideoCommand::DISPLAY_IMAGE:
-          displayStaticImage(command.filename);
+          {
+            Serial.printf("Video Task: Displaying image: %s\n", command.filename);
+            bool result = displayStaticImage(String(command.filename));
+            Serial.printf("Video Task: Image display result: %s\n", result ? "SUCCESS" : "FAILED");
+          }
           break;
           
         case VideoCommand::STOP_VIDEO:
+          Serial.println("Video Task: Stopping video");
           stopVideo();
           break;
       }
@@ -634,12 +656,16 @@ void videoTask(void *pvParameters) {
 
 // Simplified network command processor for network task
 void processNetworkCommand(String jsonCommand) {
+  Serial.printf("Network Task: Received JSON: %s\n", jsonCommand.c_str());
+  
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, jsonCommand);
   
   if (!error) {
     String action = doc["action"];
     String commandId = doc["commandId"];
+    
+    Serial.printf("Network Task: Parsed action='%s', commandId='%s'\n", action.c_str(), commandId.c_str());
     
     // Handle discovery command
     if (action == "discovery") {
@@ -684,24 +710,130 @@ void processNetworkCommand(String jsonCommand) {
     }
     // Handle video commands by sending to video task
     else if (action == "play_video") {
+      String filename;
+      bool loop = false;
+      
+      // Check if filename is in parameters object (new format) or directly (legacy)
+      if (doc.containsKey("parameters")) {
+        if (doc["parameters"].containsKey("filename")) {
+          filename = doc["parameters"]["filename"].as<String>();
+        }
+        if (doc["parameters"].containsKey("loop")) {
+          loop = doc["parameters"]["loop"];
+        }
+      } else {
+        // Legacy format
+        if (doc.containsKey("filename")) {
+          filename = doc["filename"].as<String>();
+        }
+        if (doc.containsKey("loop")) {
+          loop = doc["loop"];
+        }
+      }
+      
       VideoCommand vidCmd;
       vidCmd.type = VideoCommand::PLAY_VIDEO;
-      vidCmd.filename = doc["filename"].as<String>();
-      vidCmd.loop = doc["loop"];
-      xQueueSend(videoCommandQueue, &vidCmd, 0);
+      strncpy(vidCmd.filename, filename.c_str(), sizeof(vidCmd.filename) - 1);
+      vidCmd.filename[sizeof(vidCmd.filename) - 1] = '\0';  // Ensure null termination
+      vidCmd.loop = loop;
+      BaseType_t result = xQueueSend(videoCommandQueue, &vidCmd, pdMS_TO_TICKS(1000));
       
-      sendResponse(commandId, "Video playback started");
+      if (result == pdPASS) {
+        sendResponse(commandId, "Video playback started");
+      } else {
+        sendResponse(commandId, "Failed to queue video command");
+      }
     }
     else if (action == "display_image") {
+      String filename;
+      
+      // Check if filename is in parameters object (new format) or directly (legacy)
+      if (doc.containsKey("parameters") && doc["parameters"].containsKey("filename")) {
+        filename = doc["parameters"]["filename"].as<String>();
+      } else if (doc.containsKey("filename")) {
+        filename = doc["filename"].as<String>();
+      } else {
+        filename = ""; // Empty filename
+      }
+      
+      Serial.printf("Network Task: display_image command, filename JSON value: '%s'\n", filename.c_str());
+      
       VideoCommand vidCmd;
       vidCmd.type = VideoCommand::DISPLAY_IMAGE;
-      vidCmd.filename = doc["filename"].as<String>();
-      xQueueSend(videoCommandQueue, &vidCmd, 0);
+      strncpy(vidCmd.filename, filename.c_str(), sizeof(vidCmd.filename) - 1);
+      vidCmd.filename[sizeof(vidCmd.filename) - 1] = '\0';  // Ensure null termination
       
-      sendResponse(commandId, "Image displayed");
+      Serial.printf("Network Task: Queuing display command with filename: '%s'\n", vidCmd.filename);
+      BaseType_t result = xQueueSend(videoCommandQueue, &vidCmd, pdMS_TO_TICKS(1000));
+      
+      if (result == pdPASS) {
+        sendResponse(commandId, "Image command queued");
+      } else {
+        sendResponse(commandId, "Failed to queue image command");
+      }
     }
     else if (action == "status") {
       sendStatus(commandId);
+    }
+    else if (action == "get_battery") {
+      JsonDocument batteryDoc;
+      batteryDoc["commandId"] = commandId;
+      batteryDoc["deviceId"] = deviceId;
+      batteryDoc["batteryVoltage"] = readBatteryVoltage();
+      batteryDoc["batteryPercentage"] = getBatteryPercentage();
+      batteryDoc["batteryStatus"] = getBatteryStatus();
+      
+      String response;
+      serializeJson(batteryDoc, response);
+      
+      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      udp.write((const uint8_t*)response.c_str(), response.length());
+      udp.endPacket();
+    }
+    else if (action == "debug_adc") {
+      // Debug ADC reading with detailed information
+      JsonDocument debugDoc;
+      debugDoc["commandId"] = commandId;
+      debugDoc["deviceId"] = deviceId;
+      
+      // Test all common ADC pins
+      analogSetAttenuation(ADC_11db);  // 0-3.3V range
+      analogReadResolution(12);        // 12-bit resolution
+      
+      int testPins[] = {34, 35, 36, 39, 32, 33};
+      JsonArray adcReadings = debugDoc.createNestedArray("adcReadings");
+      
+      for (int i = 0; i < 6; i++) {
+        int pin = testPins[i];
+        int rawReading = analogRead(pin);
+        float voltage = (rawReading / 4095.0) * 3.3;
+        
+        JsonObject reading = adcReadings.createNestedObject();
+        reading["pin"] = pin;
+        reading["rawValue"] = rawReading;
+        reading["voltage"] = voltage;
+        reading["isPrimaryPin"] = (pin == BATTERY_PIN);
+      }
+      
+      // Primary pin detailed reading
+      int primaryRaw = analogRead(BATTERY_PIN);
+      float primaryVoltage = (primaryRaw / 4095.0) * 3.3;
+      float calculatedBattery = primaryVoltage * BATTERY_VOLTAGE_DIVIDER;
+      
+      debugDoc["primaryPin"] = BATTERY_PIN;
+      debugDoc["primaryRawADC"] = primaryRaw;
+      debugDoc["primaryVoltageADC"] = primaryVoltage;
+      debugDoc["voltageDivider"] = BATTERY_VOLTAGE_DIVIDER;
+      debugDoc["calculatedBatteryVoltage"] = calculatedBattery;
+      debugDoc["adcResolution"] = 12;
+      debugDoc["adcAttenuation"] = "11dB (0-3.3V)";
+      
+      String response;
+      serializeJson(debugDoc, response);
+      
+      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      udp.write((const uint8_t*)response.c_str(), response.length());
+      udp.endPacket();
     }
   }
 }
@@ -810,6 +942,11 @@ void sendStatus(String commandId) {
   doc["videoLooping"] = videoLooping;
   doc["currentFrame"] = currentFrame;
   
+  // Battery information
+  doc["batteryVoltage"] = readBatteryVoltage();
+  doc["batteryPercentage"] = getBatteryPercentage();
+  doc["batteryStatus"] = getBatteryStatus();
+  
   String response;
   serializeJson(doc, response);
   
@@ -835,6 +972,11 @@ void sendPeriodicStatus() {
   doc["videoLooping"] = videoLooping;
   doc["currentFrame"] = currentFrame;
   doc["timestamp"] = millis();
+  
+  // Include battery information in periodic status
+  doc["batteryVoltage"] = readBatteryVoltage();
+  doc["batteryPercentage"] = getBatteryPercentage();
+  doc["batteryStatus"] = getBatteryStatus();
   
   String statusMsg;
   serializeJson(doc, statusMsg);
@@ -1679,4 +1821,165 @@ bool displayBootImage(String filename) {
   }
   
   return false;
+}
+
+// Battery monitoring functions
+void initializeBatteryMonitoring() {
+  Serial.println("=== INITIALIZING BATTERY MONITORING ===");
+  
+  // Configure ADC pin as input
+  pinMode(BATTERY_PIN, INPUT);
+  Serial.printf("Battery monitoring pin GPIO%d configured as INPUT\n", BATTERY_PIN);
+  
+  // Set ADC width to 12 bits
+  analogReadResolution(12);
+  Serial.println("ADC resolution set to 12 bits (0-4095)");
+  
+  // Set ADC attenuation for wider voltage range (0-3.3V)
+  analogSetAttenuation(ADC_11db);  // ADC_11db = 0-3.3V range
+  Serial.println("ADC attenuation set to 11dB (0-3.3V range)");
+  
+  // Attach pin to ADC
+  adcAttachPin(BATTERY_PIN);
+  Serial.printf("ADC explicitly attached to GPIO%d\n", BATTERY_PIN);
+  
+  // Warm up the ADC with multiple reads
+  Serial.println("Warming up ADC with multiple reads...");
+  for (int i = 0; i < 10; i++) {
+    int warmupRead = analogRead(BATTERY_PIN);
+    Serial.printf("Warmup read %d: %d (%.3fV)\n", i+1, warmupRead, (warmupRead/4095.0)*3.3);
+    delay(50); // Longer delay for ADC to settle
+  }
+  
+  // Test immediate reading
+  int testRead = analogRead(BATTERY_PIN);
+  float testVoltage = (testRead / 4095.0) * 3.3 * BATTERY_VOLTAGE_DIVIDER;
+  Serial.printf("Initial test reading: %d ADC = %.3fV battery\n", testRead, testVoltage);
+  
+  Serial.println("Battery monitoring initialization complete");
+  Serial.println("========================================\n");
+}
+
+float readBatteryVoltage() {
+  // Read ADC value multiple times for better accuracy
+  int adcSum = 0;
+  const int samples = 10;
+  
+  Serial.printf("=== BATTERY MONITORING DEBUG ===\n");
+  Serial.printf("Primary battery pin: GPIO%d\n", BATTERY_PIN);
+  Serial.printf("Voltage divider ratio: %.1f\n", BATTERY_VOLTAGE_DIVIDER);
+  Serial.printf("Expected range: %.1fV - %.1fV\n", BATTERY_MIN_VOLTAGE, BATTERY_MAX_VOLTAGE);
+  
+  // Test multiple ADC pins that might be used for battery monitoring
+  int testPins[] = {34, 35, 36, 39, 32, 33}; // Common ADC pins
+  String pinNames[] = {"GPIO34 (ADC1_CH6)", "GPIO35 (ADC1_CH7)", "GPIO36 (ADC1_CH0)", "GPIO39 (ADC1_CH3)", "GPIO32 (ADC1_CH4)", "GPIO33 (ADC1_CH5)"};
+  
+  Serial.println("Testing all possible ADC pins...");
+  analogSetAttenuation(ADC_11db);  // 0-3.3V range
+  
+  for (int i = 0; i < 6; i++) {
+    int testPin = testPins[i];
+    int reading = analogRead(testPin);
+    float voltage = (reading / 4095.0) * 3.3;
+    Serial.printf("%s: ADC=%d, Voltage=%.3fV\n", pinNames[i].c_str(), reading, voltage);
+  }
+  
+  // Continue with original pin testing
+  Serial.printf("\nFocusing on primary pin GPIO%d...\n", BATTERY_PIN);
+  
+  // Test different attenuation settings
+  Serial.println("Testing ADC configurations...");
+  
+  // Try different attenuation settings
+  analogSetAttenuation(ADC_0db);   // 0-1.1V
+  int test_0db = analogRead(BATTERY_PIN);
+  Serial.printf("ADC_0db (0-1.1V): %d\n", test_0db);
+  
+  analogSetAttenuation(ADC_2_5db); // 0-1.5V  
+  int test_2_5db = analogRead(BATTERY_PIN);
+  Serial.printf("ADC_2_5db (0-1.5V): %d\n", test_2_5db);
+  
+  analogSetAttenuation(ADC_6db);   // 0-2.2V
+  int test_6db = analogRead(BATTERY_PIN);
+  Serial.printf("ADC_6db (0-2.2V): %d\n", test_6db);
+  
+  analogSetAttenuation(ADC_11db);  // 0-3.3V
+  int test_11db = analogRead(BATTERY_PIN);
+  Serial.printf("ADC_11db (0-3.3V): %d\n", test_11db);
+  
+  // Use 11dB attenuation for widest range
+  analogSetAttenuation(ADC_11db);
+  
+  for (int i = 0; i < samples; i++) {
+    int reading = analogRead(BATTERY_PIN);
+    adcSum += reading;
+    Serial.printf("ADC reading %d: %d\n", i+1, reading);
+    delay(1);
+  }
+  
+  float adcValue = adcSum / samples;
+  Serial.printf("Average ADC value: %.2f (out of 4095)\n", adcValue);
+  
+  // Convert ADC reading to voltage
+  // ESP32 ADC: 12-bit (0-4095) with 3.3V reference
+  float voltage = (adcValue / 4095.0) * 3.3;
+  Serial.printf("Raw ADC voltage: %.3fV\n", voltage);
+  
+  // Account for voltage divider if present
+  voltage *= BATTERY_VOLTAGE_DIVIDER;
+  Serial.printf("Final battery voltage: %.3fV (after divider correction)\n", voltage);
+  
+  // Additional diagnostics
+  if (adcValue == 0) {
+    Serial.println("WARNING: ADC reading is 0 - possible issues:");
+    Serial.println("  - No voltage on GPIO34");
+    Serial.println("  - GPIO34 not connected to battery circuit");
+    Serial.println("  - ADC not properly initialized");
+    Serial.println("  - Wrong GPIO pin for this board");
+  } else if (adcValue >= 4095) {
+    Serial.println("WARNING: ADC reading is maximum (4095) - possible issues:");
+    Serial.println("  - Voltage too high for current attenuation");
+    Serial.println("  - Short circuit or connection issue");
+  }
+  
+  Serial.printf("=== END BATTERY DEBUG ===\n");
+  
+  return voltage;
+}
+
+int getBatteryPercentage() {
+  float voltage = readBatteryVoltage();
+  
+  // Convert voltage to percentage
+  if (voltage >= BATTERY_MAX_VOLTAGE) {
+    return 100;
+  } else if (voltage <= BATTERY_MIN_VOLTAGE) {
+    return 0;
+  } else {
+    float percentage = ((voltage - BATTERY_MIN_VOLTAGE) / (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100.0;
+    int result = (int)percentage;
+    Serial.printf("Calculated battery percentage: %d%%\n", result);
+    return result;
+  }
+}
+
+String getBatteryStatus() {
+  int percentage = getBatteryPercentage();
+  float voltage = readBatteryVoltage();
+  
+  String status;
+  if (percentage >= 75) {
+    status = "High";
+  } else if (percentage >= 50) {
+    status = "Good";
+  } else if (percentage >= 25) {
+    status = "Low";
+  } else if (percentage >= 10) {
+    status = "Critical";
+  } else {
+    status = "Very Low";
+  }
+  
+  Serial.printf("Battery status: %s (%d%%, %.2fV)\n", status.c_str(), percentage, voltage);
+  return status;
 }

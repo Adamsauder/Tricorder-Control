@@ -75,30 +75,67 @@ def auto_configure_tricorder_for_sacn(device_id: str, device_info: dict):
         
     # Configure tricorder to respond to RGB channels 1, 2, 3 for built-in LED
     # and LED strip (if present)
-    # TEMPORARILY DISABLED FOR LED TESTING
-    # try:
-    #     # Remove any existing configuration
-    #     sacn_receiver.remove_device(device_id)
-    #     
-    #     # Add device with RGB channels 1, 2, 3 for both built-in LED and LED strip
-    #     success = sacn_receiver.add_device(
-    #         device_id=device_id,
-    #         ip_address=device_info['ip_address'],
-    #         universe=CONFIG['sacn_universe'],  # Use configured universe
-    #         start_channel=1,  # Not used for uniform strip control
-    #         num_leds=3,  # Enable LED strip with 3 LEDs
-    #         builtin_led_channels=(1, 2, 3)  # RGB on channels 1, 2, 3 for both built-in and strip
-    #     )
+    try:
+        # Remove any existing configuration
+        sacn_receiver.remove_device(device_id)
         
-    #     if success:
-    #         print(f"✅ Auto-configured {device_id} for sACN RGB control (channels 1,2,3 - built-in LED + LED strip)")
-    #     else:
-    #         print(f"⚠️ Failed to auto-configure {device_id} for sACN")
-    #         
-    # except Exception as e:
-    #     print(f"❌ Error auto-configuring {device_id} for sACN: {e}")
+        # Add device with RGB channels 1, 2, 3 for both built-in LED and LED strip
+        success = sacn_receiver.add_device(
+            device_id=device_id,
+            ip_address=device_info['ip_address'],
+            universe=CONFIG['sacn_universe'],  # Use configured universe
+            start_channel=1,  # Not used for uniform strip control
+            num_leds=3,  # Enable LED strip with 3 LEDs
+            builtin_led_channels=(1, 2, 3)  # RGB on channels 1, 2, 3 for both built-in and strip
+        )
+        
+        if success:
+            print(f"✅ Auto-configured {device_id} for sACN RGB control (channels 1,2,3 - built-in LED + LED strip)")
+        else:
+            print(f"⚠️ Failed to auto-configure {device_id} for sACN")
+            
+    except Exception as e:
+        print(f"❌ Error auto-configuring {device_id} for sACN: {e}")
     
     print(f"⚠ sACN auto-configuration temporarily disabled for {device_id} - testing direct LED control")
+
+def auto_configure_polyinoculator_for_sacn(device_id: str, device_info: dict):
+    """Automatically configure a polyinoculator for sACN LED control when it connects"""
+    if not SACN_AVAILABLE:
+        return
+        
+    sacn_receiver = get_sacn_receiver()
+    if not sacn_receiver:
+        return
+        
+    # Get device's sACN universe and LED count
+    universe = device_info.get('sacn_universe', 1)
+    num_leds = device_info.get('num_leds', 12)
+    
+    try:
+        # Remove any existing configuration
+        sacn_receiver.remove_device(device_id)
+        
+        # Add polyinoculator device with command-based control like tricorders
+        # Each LED gets 3 channels (RGB), starting from channel 1
+        success = sacn_receiver.add_device(
+            device_id=device_id,
+            ip_address=device_info['ip_address'],
+            universe=universe,
+            start_channel=1,  # Start at channel 1
+            num_leds=num_leds,  # 12 LEDs by default
+            builtin_led_channels=None  # No built-in LED control
+        )
+        
+        if success:
+            print(f"✅ Auto-configured {device_id} for sACN control (universe {universe}, {num_leds} LEDs)")
+        else:
+            print(f"⚠️ Failed to auto-configure {device_id} for sACN")
+            
+    except Exception as e:
+        print(f"❌ Error auto-configuring {device_id} for sACN: {e}")
+    
+    print(f"📡 {device_id} configured for command-based sACN processing on universe {universe}")
 
 class TricorderServer:
     def __init__(self):
@@ -141,37 +178,59 @@ class TricorderServer:
             # Handle both 'deviceId' (from ESP32) and 'device_id' formats
             device_id = data.get('deviceId') or data.get('device_id', f'UNKNOWN_{addr[0]}')
             
-            # Only process messages from actual ESP32 devices (they should have deviceId starting with TRICORDER_)
-            if not device_id.startswith('TRICORDER_'):
-                print(f"🚫 Ignoring non-tricorder device: {device_id} from {addr[0]}")
+            # Process messages from ESP32 devices (TRICORDER_ and POLYINOCULATOR_)
+            if not (device_id.startswith('TRICORDER_') or device_id.startswith('POLYINOCULATOR_')):
+                print(f"🚫 Ignoring unsupported device: {device_id} from {addr[0]}")
                 return
+            
+            # Determine device type
+            device_type = 'tricorder' if device_id.startswith('TRICORDER_') else 'polyinoculator'
             
             # Update device registry with comprehensive info
             devices[device_id] = {
                 'device_id': device_id,
+                'device_type': device_type,
                 'ip_address': addr[0],
                 'port': addr[1],
                 'last_seen': datetime.now().isoformat(),
                 'status': 'online',
-                # ESP32-specific fields
+                # Common ESP32 fields
                 'firmware_version': data.get('firmwareVersion'),
                 'wifi_connected': data.get('wifiConnected'),
                 'free_heap': data.get('freeHeap'),
                 'uptime': data.get('uptime'),
-                'sd_card_initialized': data.get('sdCardInitialized'),
-                'video_playing': data.get('videoPlaying'),
-                'current_video': data.get('currentVideo'),
-                'video_looping': data.get('videoLooping'),
-                'current_frame': data.get('currentFrame'),
                 **data  # Include any additional fields
             }
             
-            print(f"✓ Updated device: {device_id} at {addr[0]}")
+            # Add device-specific fields
+            if device_type == 'tricorder':
+                devices[device_id].update({
+                    'sd_card_initialized': data.get('sdCardInitialized'),
+                    'video_playing': data.get('videoPlaying'),
+                    'current_video': data.get('currentVideo'),
+                    'video_looping': data.get('videoLooping'),
+                    'current_frame': data.get('currentFrame'),
+                    'battery_voltage': data.get('batteryVoltage'),
+                    'battery_percentage': data.get('batteryPercentage'),
+                    'battery_status': data.get('batteryStatus'),
+                })
+            elif device_type == 'polyinoculator':
+                devices[device_id].update({
+                    'num_leds': data.get('numLeds', 12),
+                    'brightness': data.get('brightness', 128),
+                    'sacn_enabled': data.get('sacnEnabled', True),
+                    'sacn_universe': data.get('sacnUniverse', 1),
+                })
             
-            # Auto-configure tricorder for sACN LED control (only if not already configured)
+            print(f"✓ Updated device: {device_id} ({device_type}) at {addr[0]}")
+            
+            # Auto-configure device for sACN control (only if not already configured)
             if device_id not in devices or 'sacn_configured' not in devices[device_id]:
                 print(f"🔧 Configuring {device_id} for sACN...")
-                auto_configure_tricorder_for_sacn(device_id, devices[device_id])
+                if device_type == 'tricorder':
+                    auto_configure_tricorder_for_sacn(device_id, devices[device_id])
+                elif device_type == 'polyinoculator':
+                    auto_configure_polyinoculator_for_sacn(device_id, devices[device_id])
                 devices[device_id]['sacn_configured'] = True
                 print(f"✅ {device_id} sACN configuration complete")
             else:
@@ -304,13 +363,28 @@ def index():
                         ${device.firmware_version ? `<p><strong>Firmware:</strong> ${device.firmware_version}</p>` : ''}
                         ${device.free_heap ? `<p><strong>Free Heap:</strong> ${device.free_heap} bytes</p>` : ''}
                         ${device.video_playing ? `<p><strong>Video:</strong> ${device.current_video || 'Playing'} ${device.video_looping ? '(Looping)' : ''}</p>` : ''}
+                        
+                        <div style="margin: 10px 0;">
+                            <strong>🔋 Battery:</strong>
+                            <div style="background: #333; border-radius: 5px; overflow: hidden; height: 20px; position: relative; margin: 5px 0;">
+                                <div style="width: ${device.batteryPercentage || 0}%; height: 100%; background: ${getBatteryColor(device.batteryPercentage || 0)}; transition: width 0.3s;"></div>
+                                <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">
+                                    ${device.batteryPercentage || 0}% (${device.batteryVoltage ? device.batteryVoltage.toFixed(2) + 'V' : 'N/A'})
+                                </div>
+                            </div>
+                            <div style="font-size: 12px; color: #888;">Status: ${device.batteryStatus || 'Unknown'}</div>
+                            <button onclick="requestBatteryUpdate('${device.device_id}')" style="font-size: 12px; padding: 2px 6px; margin-top: 5px;">🔄 Update Battery</button>
+                        </div>
+                        
                         <p><strong>🎭 sACN:</strong> <span style="color: #4CAF50;">RGB Channels 1,2,3 (Built-in LED + LED Strip)</span></p>
                         <div style="margin-top: 10px;">
                             <strong>📺 Image Controls:</strong><br>
                             <button onclick="sendBootScreen('${device.device_id}')">Play Startup</button>
                             <button onclick="sendImageCommand('${device.device_id}', 'greenscreen.jpg')" style="background: #00ff00; color: black; margin: 2px;">🟩 Green Screen</button>
                             <button onclick="sendImageCommand('${device.device_id}', 'test.jpg')" style="background: #ffcc00; color: black; margin: 2px;">📺 Test Card</button>
-                            <button onclick="sendImageCommand('${device.device_id}', 'test2.jpg')" style="background: #ff6600; color: white; margin: 2px;">📺 Test2</button>
+                            <button onclick="sendImageCommand('${device.device_id}', 'test2.jpg')" style="background: #ff6600; color: white; margin: 2px;">� Test2</button>
+                            <button onclick="sendImageCommand('${device.device_id}', 'color_red.jpg')" style="background: #ff0000; color: white; margin: 2px;">� Red Screen</button>
+                            <button onclick="sendImageCommand('${device.device_id}', 'color_white.jpg')" style="background: #ffffff; color: black; margin: 2px;">⚪ White Screen</button>
                             <br><br>
                             <strong>💡 LED Controls:</strong><br>
                             <button onclick="sendLEDColor('${device.device_id}', 255, 0, 0)" style="background: #ff4444; margin: 2px;">🔴 Red</button>
@@ -780,6 +854,40 @@ def index():
                 })
                 .catch(error => console.error('sACN toggle error:', error));
             }
+            
+            // Battery Functions
+            function getBatteryColor(percentage) {
+                if (percentage >= 75) return '#4CAF50';  // Green
+                if (percentage >= 50) return '#8BC34A';  // Light Green
+                if (percentage >= 25) return '#FF9800';  // Orange
+                if (percentage >= 10) return '#FF5722';  // Red Orange
+                return '#F44336';  // Red
+            }
+            
+            function requestBatteryUpdate(deviceId) {
+                console.log(`Requesting battery update for ${deviceId}`);
+                
+                fetch(`/api/battery/${deviceId}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Battery response:', data);
+                    if (data.error) {
+                        alert(`Battery Error: ${data.error}`);
+                    } else {
+                        alert(`Battery Status for ${deviceId}:\\n` +
+                              `Voltage: ${data.battery_voltage}V\\n` +
+                              `Percentage: ${data.battery_percentage}%\\n` +
+                              `Status: ${data.battery_status}`);
+                        
+                        // Trigger a device refresh to update the display
+                        loadDevices();
+                    }
+                })
+                .catch(error => {
+                    console.error('Battery request error:', error);
+                    alert('Failed to get battery information');
+                });
+            }
         </script>
     </body>
     </html>
@@ -911,7 +1019,18 @@ def send_udp_command_to_device(device_id: str, action: str, parameters: dict, co
         'timestamp': datetime.now().isoformat()
     }
     
-    if parameters:
+    # Handle LED commands specially - ESP32 expects RGB values at top level
+    if action in ['set_led_color', 'set_builtin_led'] and parameters:
+        # Flatten LED parameters to top level for ESP32 compatibility
+        if 'r' in parameters:
+            esp32_command['r'] = parameters['r']
+        if 'g' in parameters:
+            esp32_command['g'] = parameters['g'] 
+        if 'b' in parameters:
+            esp32_command['b'] = parameters['b']
+        print(f"sACN LED command to {device_id}: R={parameters.get('r')}, G={parameters.get('g')}, B={parameters.get('b')}")
+    elif parameters:
+        # For non-LED commands, use parameters object
         esp32_command['parameters'] = parameters
         
     try:
@@ -1000,6 +1119,54 @@ def send_command():
         
     except Exception as e:
         print(f"Command error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/battery/<device_id>', methods=['GET'])
+def get_device_battery(device_id):
+    """Get battery status for a specific device"""
+    try:
+        if device_id not in devices:
+            return jsonify({'error': 'Device not found'}), 404
+        
+        device = devices[device_id]
+        
+        # Send battery command to device
+        command_id = str(uuid.uuid4())
+        esp32_command = {
+            'commandId': command_id,
+            'action': 'get_battery',
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Send UDP command
+        command_json = json.dumps(esp32_command)
+        if server.udp_socket:
+            server.udp_socket.sendto(
+                command_json.encode('utf-8'),
+                (device['ip_address'], CONFIG['udp_port'])
+            )
+        
+        # Wait for response (simplified - in production you'd want better response handling)
+        time.sleep(0.1)
+        
+        # Return battery info from device status if available
+        if 'batteryPercentage' in device:
+            return jsonify({
+                'device_id': device_id,
+                'battery_voltage': device.get('batteryVoltage', 0),
+                'battery_percentage': device.get('batteryPercentage', 0),
+                'battery_status': device.get('batteryStatus', 'Unknown'),
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'device_id': device_id,
+                'error': 'Battery information not available',
+                'timestamp': datetime.now().isoformat()
+            })
+        
+    except Exception as e:
+        print(f"Battery request error: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ==========================================

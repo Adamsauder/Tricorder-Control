@@ -197,9 +197,19 @@ class SACNReceiver:
                         dmx_data[b_ch - 1]
                     )
                     
-                    # Only send if values changed
+                    # Only send if values changed AND are not just "empty" sACN data
                     if device.last_builtin_led_values != current_builtin_values:
-                        if self.send_command_callback:
+                        # Check if this is meaningful sACN data (non-zero) or if we had previous non-zero values
+                        is_meaningful_data = (
+                            # Current values are non-zero (active lighting)
+                            any(v > 0 for v in current_builtin_values) or
+                            # Previous values were non-zero (we're turning off intentionally)
+                            (device.last_builtin_led_values and any(v > 0 for v in device.last_builtin_led_values))
+                        )
+                        
+                        if is_meaningful_data and self.send_command_callback:
+                            print(f"📡 sACN sending LED update to {device.device_id}: R:{current_builtin_values[0]} G:{current_builtin_values[1]} B:{current_builtin_values[2]}")
+                            
                             # Send built-in LED command
                             self.send_command_callback(
                                 device.device_id,
@@ -222,8 +232,11 @@ class SACNReceiver:
                                         'b': current_builtin_values[2]
                                     }
                                 )
+                        else:
+                            # Skip sending "empty" sACN data that would interfere with manual control
+                            print(f"📡 sACN skipping empty data for {device.device_id}: {current_builtin_values}")
                         
-                        # Update stored values
+                        # Update stored values regardless of whether we sent commands
                         device.last_builtin_led_values = current_builtin_values
             
             # Note: LED strip is now handled above with built-in LED for uniform control

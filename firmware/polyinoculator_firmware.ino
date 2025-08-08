@@ -25,7 +25,7 @@ const int UDP_PORT = 8888;
 String deviceId = "POLYINOCULATOR_001";
 String firmwareVersion = "0.1";
 int sacnUniverse = 1;  // SACN universe for this device (configurable)
-int sacnStartAddress = 1;  // Starting DMX address
+int sacnStartAddress = 4;  // Starting DMX address (channels 4-39 for 12 LEDs)
 
 // Hardware objects
 CRGB leds[NUM_LEDS];

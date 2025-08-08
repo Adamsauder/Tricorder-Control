@@ -19,12 +19,13 @@ ACN_PACKET_IDENTIFIER = b"ASC-E1.17\x00\x00\x00"
 
 @dataclass
 class TricorderDevice:
-    """Represents a tricorder device receiving sACN data"""
+    """Represents a device receiving sACN data (tricorder or polyinoculator)"""
     device_id: str
     ip_address: str
     universe: int
     start_channel: int  # DMX channel (1-512) 
     num_leds: int = 3
+    device_type: str = "tricorder"  # "tricorder" or "polyinoculator"
     builtin_led_channels: Optional[Tuple[int, int, int]] = None  # RGB channels for built-in LED
     last_seen: float = 0
     online: bool = False
@@ -57,14 +58,16 @@ class SACNReceiver:
         
     def add_device(self, device_id: str, ip_address: str, universe: int, 
                    start_channel: int, num_leds: int = 3, 
-                   builtin_led_channels: Optional[Tuple[int, int, int]] = None):
-        """Add a tricorder device to receive sACN control"""
+                   builtin_led_channels: Optional[Tuple[int, int, int]] = None,
+                   device_type: str = "tricorder"):
+        """Add a device to receive sACN control"""
         device = TricorderDevice(
             device_id=device_id,
             ip_address=ip_address,
             universe=universe,
             start_channel=start_channel,
             num_leds=num_leds,
+            device_type=device_type,
             builtin_led_channels=builtin_led_channels,
             last_seen=time.time(),
             online=True,
@@ -184,60 +187,105 @@ class SACNReceiver:
             device.last_seen = time.time()
             device.online = True
             
-            # Check built-in LED changes first (most common use case)
-            if device.builtin_led_channels:
-                r_ch, g_ch, b_ch = device.builtin_led_channels
-                if (r_ch - 1 < len(dmx_data) and 
-                    g_ch - 1 < len(dmx_data) and 
-                    b_ch - 1 < len(dmx_data)):
-                    
-                    current_builtin_values = (
-                        dmx_data[r_ch - 1],
-                        dmx_data[g_ch - 1],
-                        dmx_data[b_ch - 1]
-                    )
-                    
-                    # Only send if values changed AND are not just "empty" sACN data
-                    if device.last_builtin_led_values != current_builtin_values:
-                        # Check if this is meaningful sACN data (non-zero) or if we had previous non-zero values
-                        is_meaningful_data = (
-                            # Current values are non-zero (active lighting)
-                            any(v > 0 for v in current_builtin_values) or
-                            # Previous values were non-zero (we're turning off intentionally)
-                            (device.last_builtin_led_values and any(v > 0 for v in device.last_builtin_led_values))
+            if device.device_type == "tricorder":
+                # Handle tricorder with built-in LED channels
+                if device.builtin_led_channels:
+                    r_ch, g_ch, b_ch = device.builtin_led_channels
+                    if (r_ch - 1 < len(dmx_data) and 
+                        g_ch - 1 < len(dmx_data) and 
+                        b_ch - 1 < len(dmx_data)):
+                        
+                        current_builtin_values = (
+                            dmx_data[r_ch - 1],
+                            dmx_data[g_ch - 1],
+                            dmx_data[b_ch - 1]
                         )
                         
-                        if is_meaningful_data and self.send_command_callback:
-                            print(f"📡 sACN sending LED update to {device.device_id}: R:{current_builtin_values[0]} G:{current_builtin_values[1]} B:{current_builtin_values[2]}")
-                            
-                            # Send built-in LED command
-                            self.send_command_callback(
-                                device.device_id,
-                                'set_builtin_led',
-                                {
-                                    'r': current_builtin_values[0],
-                                    'g': current_builtin_values[1],
-                                    'b': current_builtin_values[2]
-                                }
+                        # Only send if values changed AND are not just "empty" sACN data
+                        if device.last_builtin_led_values != current_builtin_values:
+                            # Check if this is meaningful sACN data (non-zero) or if we had previous non-zero values
+                            is_meaningful_data = (
+                                # Current values are non-zero (active lighting)
+                                any(v > 0 for v in current_builtin_values) or
+                                # Previous values were non-zero (we're turning off intentionally)
+                                (device.last_builtin_led_values and any(v > 0 for v in device.last_builtin_led_values))
                             )
                             
-                            # Also send LED strip command if configured
-                            if device.num_leds > 0:
+                            if is_meaningful_data and self.send_command_callback:
+                                print(f"📡 sACN sending LED update to {device.device_id}: R:{current_builtin_values[0]} G:{current_builtin_values[1]} B:{current_builtin_values[2]}")
+                                
+                                # Send tricorder commands
                                 self.send_command_callback(
                                     device.device_id,
-                                    'set_led_color',
+                                    'set_builtin_led',
                                     {
                                         'r': current_builtin_values[0],
                                         'g': current_builtin_values[1],
                                         'b': current_builtin_values[2]
                                     }
                                 )
-                        else:
-                            # Skip sending "empty" sACN data that would interfere with manual control
-                            print(f"📡 sACN skipping empty data for {device.device_id}: {current_builtin_values}")
+                                
+                                # Also send LED strip command if configured
+                                if device.num_leds > 0:
+                                    self.send_command_callback(
+                                        device.device_id,
+                                        'set_led_color',
+                                        {
+                                            'r': current_builtin_values[0],
+                                            'g': current_builtin_values[1],
+                                            'b': current_builtin_values[2]
+                                        }
+                                    )
+                            else:
+                                # Skip sending "empty" sACN data that would interfere with manual control
+                                print(f"📡 sACN skipping empty data for {device.device_id}: {current_builtin_values}")
+                            
+                            # Update stored values regardless of whether we sent commands
+                            device.last_builtin_led_values = current_builtin_values
+            
+            elif device.device_type == "polyinoculator":
+                # Handle polyinoculator with LED array
+                # For polyinoculators, process multiple LEDs based on start channel
+                # Each LED takes 3 channels (RGB)
+                led_commands = []
+                for led_idx in range(device.num_leds):
+                    channel_offset = led_idx * 3
+                    r_channel = device.start_channel + channel_offset - 1  # Convert to 0-based
+                    g_channel = r_channel + 1
+                    b_channel = r_channel + 2
+                    
+                    if r_channel < len(dmx_data) and g_channel < len(dmx_data) and b_channel < len(dmx_data):
+                        r_val = dmx_data[r_channel]
+                        g_val = dmx_data[g_channel]
+                        b_val = dmx_data[b_channel]
+                        led_commands.append([r_val, g_val, b_val])
+                    else:
+                        led_commands.append([0, 0, 0])
+                
+                # Only send if values changed AND are not just "empty" sACN data
+                if device.last_led_values != led_commands:
+                    # Check if this is meaningful sACN data (non-zero) or if we had previous non-zero values
+                    has_active_leds = any(any(rgb) for rgb in led_commands)
+                    had_active_leds = device.last_led_values and any(any(rgb) for rgb in device.last_led_values)
+                    is_meaningful_data = has_active_leds or had_active_leds
+                    
+                    if is_meaningful_data and self.send_command_callback:
+                        print(f"📡 sACN sending LED array update to {device.device_id}: {led_commands[:3]}...")  # Show first 3 LEDs
                         
-                        # Update stored values regardless of whether we sent commands
-                        device.last_builtin_led_values = current_builtin_values
+                        # Send array command to polyinoculator
+                        self.send_command_callback(
+                            device.device_id,
+                            'set_leds_array',
+                            {
+                                'leds': led_commands
+                            }
+                        )
+                    else:
+                        # Skip sending "empty" sACN data that would interfere with manual control
+                        print(f"📡 sACN skipping empty data for {device.device_id}")
+                    
+                    # Update stored values regardless of whether we sent commands
+                    device.last_led_values = led_commands
             
             # Note: LED strip is now handled above with built-in LED for uniform control
                 

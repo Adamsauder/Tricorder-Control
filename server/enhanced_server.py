@@ -86,7 +86,8 @@ def auto_configure_tricorder_for_sacn(device_id: str, device_info: dict):
             universe=CONFIG['sacn_universe'],  # Use configured universe
             start_channel=1,  # Not used for uniform strip control
             num_leds=3,  # Enable LED strip with 3 LEDs
-            builtin_led_channels=(1, 2, 3)  # RGB on channels 1, 2, 3 for both built-in and strip
+            builtin_led_channels=(1, 2, 3),  # RGB on channels 1, 2, 3 for both built-in and strip
+            device_type="tricorder"  # Mark as tricorder
         )
         
         if success:
@@ -96,8 +97,6 @@ def auto_configure_tricorder_for_sacn(device_id: str, device_info: dict):
             
     except Exception as e:
         print(f"❌ Error auto-configuring {device_id} for sACN: {e}")
-    
-    print(f"⚠ sACN auto-configuration temporarily disabled for {device_id} - testing direct LED control")
 
 def auto_configure_polyinoculator_for_sacn(device_id: str, device_info: dict):
     """Automatically configure a polyinoculator for sACN LED control when it connects"""
@@ -107,6 +106,12 @@ def auto_configure_polyinoculator_for_sacn(device_id: str, device_info: dict):
     sacn_receiver = get_sacn_receiver()
     if not sacn_receiver:
         return
+    
+    # Ensure command callback is set up for sACN processing
+    def sacn_command_callback(device_id: str, action: str, params: dict):
+        command_id = str(uuid.uuid4())
+        send_udp_command_to_device(device_id, action, params, command_id)
+    set_command_callback(sacn_command_callback)
         
     # Get device's sACN universe and LED count
     universe = device_info.get('sacn_universe', 1)
@@ -124,7 +129,8 @@ def auto_configure_polyinoculator_for_sacn(device_id: str, device_info: dict):
             universe=universe,
             start_channel=1,  # Start at channel 1
             num_leds=num_leds,  # 12 LEDs by default
-            builtin_led_channels=None  # No built-in LED control
+            builtin_led_channels=None,  # No built-in LED control
+            device_type="polyinoculator"  # Mark as polyinoculator
         )
         
         if success:

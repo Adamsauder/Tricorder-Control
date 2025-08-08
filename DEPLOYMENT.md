@@ -2,7 +2,7 @@
 
 ## **You Have a Complete, Production-Ready System!** 
 
-Congratulations! The Tricorder Control System with Over-The-Air firmware updates is **ready for immediate deployment**.
+Congratulations! The Prop Control System with Over-The-Air firmware updates is **ready for immediate deployment**.
 
 ---
 

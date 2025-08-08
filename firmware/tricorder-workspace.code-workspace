@@ -1,0 +1,24 @@
+{
+  "folders": [
+    {
+      "name": "Tricorder (ESP32)",
+      "path": "./tricorder"
+    },
+    {
+      "name": "Polyinoculator (ESP32-C3)", 
+      "path": "./polyinoculator"
+    }
+  ],
+  "settings": {
+    "files.associations": {
+      "*.ino": "cpp"
+    },
+    "C_Cpp.default.configurationProvider": "platformio-ide"
+  },
+  "extensions": {
+    "recommendations": [
+      "platformio.platformio-ide",
+      "ms-vscode.cpptools"
+    ]
+  }
+}

@@ -40,7 +40,7 @@ const SimpleApp: React.FC = () => {
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif', backgroundColor: '#f5f5f5', minHeight: '100vh' }}>
       <h1 style={{ textAlign: 'center', color: '#333', marginBottom: '30px' }}>
-        🚀 Tricorder Control Farm
+        🚀 Prop Control Farm
       </h1>
       
       <div style={{

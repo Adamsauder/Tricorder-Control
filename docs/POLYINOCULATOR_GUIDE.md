@@ -1,6 +1,6 @@
 # Polyinoculator Control System
 
-The Polyinoculator is a secondary prop device in the Tricorder Control System, designed for simple LED strip control using the Seeed Studio XIAO ESP32-C3 microcontroller.
+The Polyinoculator is a secondary prop device in the Prop Control System, designed for simple LED strip control using the Seeed Studio XIAO ESP32-C3 microcontroller.
 
 ## Hardware Specifications
 

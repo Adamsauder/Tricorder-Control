@@ -1,4 +1,4 @@
-# Tricorder Control System - Server Requirements
+# Prop Control System - Server Requirements
 # Version 2.0.0 - "OTA Revolution" Release
 
 # Core web framework and WebSocket support

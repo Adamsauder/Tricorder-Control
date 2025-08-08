@@ -1,4 +1,4 @@
-# 🚀 Release Notes - Tricorder Control System
+# 🚀 Release Notes - Prop Control System
 
 ## Version 0.1 - "First Light" ✨
 **Release Date: July 29, 2025**
@@ -36,7 +36,7 @@
 - **Network Stability**: Reliable WiFi connection and UDP command processing
 
 ### 📝 **Version 0.1 Scope**
-This initial release establishes the foundation for the Tricorder Control System with essential image display capabilities and web-based control. Perfect for basic film set prop applications requiring reliable image display and remote control.
+This initial release establishes the foundation for the Prop Control System with essential image display capabilities and web-based control. Perfect for basic film set prop applications requiring reliable image display and remote control.
 
 ---
 
@@ -238,7 +238,7 @@ npm install  # Updates Material-UI and TypeScript dependencies
 
 ## 🎉 **Conclusion**
 
-**Version 2.0.0 represents a MAJOR MILESTONE** in the Tricorder Control System development. The addition of comprehensive Over-The-Air update capabilities transforms this from a prototype system into a **production-ready, professional-grade device management platform**.
+**Version 2.0.0 represents a MAJOR MILESTONE** in the Prop Control System development. The addition of comprehensive Over-The-Air update capabilities transforms this from a prototype system into a **production-ready, professional-grade device management platform**.
 
 **Key Achievements:**
 - ✅ **Eliminated USB dependencies** for firmware updates

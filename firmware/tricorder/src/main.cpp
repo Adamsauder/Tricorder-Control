@@ -1,5 +1,5 @@
 /*
- * Tricorder Control Firmware - Enhanced with Video Playback and Dual-Core Processing
+ * Prop Control Firmware - Enhanced with Video Playback and Dual-Core Processing
  * ESP32-based prop controller with video playback from SD card
  */
 
@@ -166,7 +166,7 @@ void processNetworkCommand(String jsonCommand);
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Starting Tricorder Control System...");
+  Serial.println("Starting Prop Control System...");
   
   // Allocate video buffer with fallback sizes
   Serial.printf("Free heap before buffer allocation: %d bytes\n", ESP.getFreeHeap());
@@ -437,7 +437,7 @@ void displayInitializationScreen() {
   int currentLine = 0;
   
   tft.setCursor(textX, textY + (currentLine * lineHeight));
-  tft.println("TRICORDER CONTROL SYSTEM");
+  tft.println("PROP CONTROL SYSTEM");
   currentLine += 2;
   
   tft.setCursor(textX, textY + (currentLine * lineHeight));

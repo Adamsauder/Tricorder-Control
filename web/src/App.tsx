@@ -223,7 +223,7 @@ const App: React.FC = () => {
           <AppBar position="static">
             <Toolbar>
               <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-                Tricorder Control System - Legacy View
+                Prop Control System - Legacy View
               </Typography>
               <Chip label={`${mockDevices.filter(d => d.status === 'online').length}/${mockDevices.length} Online`} color="primary" />
             </Toolbar>

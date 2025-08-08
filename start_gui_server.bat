@@ -1,6 +1,6 @@
 @echo off
 echo ================================================
-echo Tricorder Control System - GUI Server
+echo Prop Control System - GUI Server
 echo Version 0.1 - "Mission Control"
 echo ================================================
 echo.

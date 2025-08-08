@@ -1,6 +1,6 @@
 @echo off
 echo ================================================
-echo Tricorder Control System - Standalone Server
+echo Prop Control System - Standalone Server
 echo Version 0.1 - "Command Center"
 echo ================================================
 echo.

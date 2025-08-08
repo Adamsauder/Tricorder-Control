@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 
 Write-Host "================================================" -ForegroundColor Cyan
-Write-Host "Tricorder Control System - Standalone Server" -ForegroundColor Cyan
+Write-Host "Prop Control System - Standalone Server" -ForegroundColor Cyan
 Write-Host "Version 0.1 - 'Command Center'" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host ""

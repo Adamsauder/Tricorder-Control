@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone Tricorder Control Server
+Standalone Prop Control Server
 Command-line server application that runs independently of the web GUI
 Version 0.1 - "Command Center"
 """
@@ -655,7 +655,7 @@ def main():
     CONFIG['log_file'] = args.log_file
     
     print("=" * 60)
-    print("Tricorder Control System - Standalone Server v0.1")
+    print("Prop Control System - Standalone Server v0.1")
     print("=" * 60)
     print(f"UDP Port: {CONFIG['udp_port']}")
     print(f"Log File: {CONFIG['log_file']}")

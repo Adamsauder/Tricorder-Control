@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tricorder Control GUI Server
+Prop Control GUI Server
 GUI version of the standalone server with visual interface
 Version 0.1 - "Mission Control"
 """
@@ -53,7 +53,7 @@ class TricorderGUIServer:
         
     def setup_gui(self):
         """Setup the main GUI with modern UniFi-inspired styling"""
-        self.root.title("Tricorder Control System - Mission Control v0.1")
+        self.root.title("Prop Control System - Mission Control v0.1")
         self.root.geometry("1400x900")
         self.root.configure(bg='#0f172a')  # Modern dark slate
         
@@ -288,7 +288,7 @@ class TricorderGUIServer:
         title_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         title_label = ttk.Label(title_frame, 
-                               text="Tricorder Control System", 
+                               text="Prop Control System", 
                                style='Header.TLabel')
         title_label.pack(anchor=tk.W)
         
@@ -1489,10 +1489,10 @@ class TricorderGUIServer:
     
     def show_about(self):
         """Show about dialog"""
-        about_text = """Tricorder Control GUI Server v0.1
+        about_text = """Prop Control GUI Server v0.1
 "Mission Control"
 
-A graphical interface for the Tricorder Control System.
+A graphical interface for the Prop Control System.
 
 Features:
 • Visual device management
@@ -1502,7 +1502,7 @@ Features:
 • Statistics and logging
 
 Built with Python tkinter
-Part of the Tricorder Control System v0.1"""
+Part of the Prop Control System v0.1"""
         
         messagebox.showinfo("About", about_text)
     

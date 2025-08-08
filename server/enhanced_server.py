@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Simple Server with sACN Data Viewer
-Tricorder control server with sACN monitoring capabilities
+Prop control server with sACN monitoring capabilities
 """
 
 import asyncio
@@ -268,7 +268,7 @@ def index():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Tricorder Control System</title>
+        <title>Prop Control System</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
             .container { max-width: 1200px; margin: 0 auto; }
@@ -283,7 +283,7 @@ def index():
     </head>
     <body>
         <div class="container">
-            <h1>🔺 Tricorder Control System</h1>
+            <h1>🔺 Prop Control System</h1>
             
             <div class="status">
                 <h2>Server Status</h2>
@@ -1490,7 +1490,7 @@ def run_udp_server():
     server.start_udp_listener()
 
 if __name__ == '__main__':
-    print("Starting Tricorder Control Server with sACN Data Viewer...")
+    print("Starting Prop Control Server with sACN Data Viewer...")
     print(f"Web interface: http://localhost:{CONFIG['web_port']}")
     print(f"UDP listener: port {CONFIG['udp_port']}")
     

@@ -153,7 +153,7 @@ python test_video.py 192.168.1.48
 
 When working correctly, the serial monitor should show:
 ```
-Starting Tricorder Control System...
+Starting Prop Control System...
 SD card initialized successfully!
 WiFi connected!
 IP address: 192.168.1.48

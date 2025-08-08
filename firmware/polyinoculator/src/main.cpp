@@ -11,7 +11,7 @@
 #include <FastLED.h>
 
 // Pin definitions for Seeed Studio XIAO ESP32-C3
-#define LED_PIN 2          // NeoPixel data pin - D0/GPIO2 (best choice for XIAO C3)
+#define LED_PIN 10         // NeoPixel data pin - D10/GPIO10 (recommended for XIAO C3)
 #define NUM_LEDS 12        // Number of WS2812B pixels
 #define STATUS_LED_PIN 3   // Optional status LED pin
 
@@ -24,7 +24,8 @@ const int UDP_PORT = 8888;
 // Device identification
 String deviceId = "POLYINOCULATOR_001";
 String firmwareVersion = "0.1";
-int sacnUniverse = 2;  // SACN universe for this device (configurable)
+int sacnUniverse = 1;  // SACN universe for this device (configurable)
+int sacnStartAddress = 4;  // Starting DMX address (channels 4-39 for 12 LEDs)
 
 // Hardware objects
 CRGB leds[NUM_LEDS];

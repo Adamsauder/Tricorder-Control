@@ -1,6 +1,6 @@
 <!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
 
-# Tricorder Control System - Copilot Instructions
+# Prop Control System - Copilot Instructions
 
 This is a multi-component embedded systems project for controlling ESP32-based film set props.
 

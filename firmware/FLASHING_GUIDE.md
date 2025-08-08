@@ -1,83 +1,105 @@
-# ESP32-2432S032C-I Flashing Guide
+# Prop Control System - PlatformIO Flashing Guide
 
-## Hardware Preparation
-
-### 1. Board Setup
-- Connect your ESP32-2432S032C-I to your computer via USB-C cable
-- The board should power on and show a demo screen
-- Red LED should indicate power is on
-
-### 2. Drivers (Windows only)
-If the board isn't recognized, install CP2102 drivers:
-- Download from: https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
-- Or use automatic driver installation via Windows Update
-
-## Option A: Arduino IDE Flashing
-
-### 1. Install Arduino IDE
-- Download Arduino IDE 2.0+ from: https://www.arduino.cc/en/software
-- Install and open the IDE
-
-### 2. Configure ESP32 Board Package
-1. File → Preferences
-2. Additional Board Manager URLs: 
-   ```
-   https://espressif.github.io/arduino-esp32/package_esp32_index.json
-   ```
-3. Tools → Board → Board Manager
-4. Search "ESP32" and install "esp32 by Espressif Systems"
-
-### 3. Install Required Libraries
-Go to Tools → Manage Libraries and install:
-- **FastLED** by Daniel Garcia (version 3.7.0+)
-- **TFT_eSPI** by Bodmer (version 2.5.43+)
-- **ArduinoJson** by Benoit Blanchon (version 7.2.0+)
-- **ESPAsyncWebServer** by Me-No-Dev (version 1.2.6+)
-
-### 4. Configure TFT_eSPI Library
-1. Find TFT_eSPI library folder:
-   - Windows: `Documents\Arduino\libraries\TFT_eSPI`
-   - macOS: `~/Documents/Arduino/libraries/TFT_eSPI`
-   - Linux: `~/Arduino/libraries/TFT_eSPI`
-
-2. Copy the `User_Setup.h` file from the firmware folder to the TFT_eSPI library folder
-3. OR edit the existing `User_Setup.h` in TFT_eSPI library with our configuration
-
-### 5. Board Configuration
-1. Tools → Board → ESP32 Arduino → ESP32 Dev Module
-2. Tools → Upload Speed → 921600
-3. Tools → CPU Frequency → 240MHz (WiFi/BT)
-4. Tools → Flash Frequency → 80MHz
-5. Tools → Flash Mode → QIO
-6. Tools → Flash Size → 4MB (32Mb)
-7. Tools → Partition Scheme → Huge APP (3MB No OTA/1MB SPIFFS)
-8. Tools → PSRAM → Disabled
-9. Tools → Port → Select your COM port (e.g., COM3, COM4)
-
-### 6. Upload Firmware
-1. Open `tricorder_firmware.ino` in Arduino IDE
-2. Press and hold the **BOOT** button on the ESP32 board
-3. Click **Upload** in Arduino IDE
-4. Keep holding BOOT until "Connecting..." appears, then release
-5. Wait for upload to complete (about 30-60 seconds)
-
-## Option B: PlatformIO Flashing (Recommended)
+## Prerequisites
 
 ### 1. Install VS Code and PlatformIO
-1. Install Visual Studio Code
-2. Install PlatformIO IDE extension
-3. Restart VS Code
+1. **Download and Install VS Code**: https://code.visualstudio.com/
+2. **Install PlatformIO IDE Extension**:
+   - Open VS Code
+   - Go to Extensions (Ctrl+Shift+X)
+   - Search "PlatformIO IDE"
+   - Install the official PlatformIO extension
+   - Restart VS Code when prompted
 
-### 2. Open Project
-1. File → Open Folder
-2. Select the `firmware` folder
-3. PlatformIO should detect the `platformio.ini` file
+### 2. Hardware Preparation
+- **Tricorder**: Connect ESP32-2432S032C-I via USB-C cable
+- **Polyinoculator**: Connect Seeed XIAO ESP32-C3 via USB-C cable
+- The boards should power on (red LED indicates power)
 
-### 3. Flash the Firmware
-1. Connect ESP32 via USB-C
-2. Press **Ctrl+Shift+P** (or **Cmd+Shift+P** on macOS)
-3. Type "PlatformIO: Upload" and press Enter
-4. OR click the Upload button (→) in the PlatformIO toolbar
+### 3. Drivers (Windows only)
+If the board isn't recognized, install drivers:
+- **ESP32-2432S032C-I**: CP2102 drivers from https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
+- **XIAO ESP32-C3**: Usually auto-detected, but CH340 drivers may be needed
+
+## Firmware Structure
+
+The project is organized into separate PlatformIO projects:
+
+```
+firmware/
+├── tricorder/           # ESP32 Tricorder firmware
+│   ├── src/main.cpp
+│   └── platformio.ini
+├── polyinoculator/      # ESP32-C3 Polyinoculator firmware  
+│   ├── src/main.cpp
+│   └── platformio.ini
+└── FLASHING_GUIDE.md   # This file
+```
+
+## Flashing Instructions
+
+### Method 1: Open Individual Project Folders
+
+#### For Tricorder (ESP32):
+1. **Open Tricorder Project**:
+   - File → Open Folder
+   - Navigate to `firmware/tricorder/`
+   - PlatformIO will detect the `platformio.ini` file
+
+2. **Flash Tricorder**:
+   - Connect ESP32-2432S032C-I via USB-C
+   - Press **Ctrl+Shift+P** → "PlatformIO: Upload"
+   - OR click Upload button (→) in PlatformIO toolbar
+   - **If upload fails**: Hold BOOT button while clicking Upload
+
+#### For Polyinoculator (ESP32-C3):
+1. **Open Polyinoculator Project**:
+   - File → Open Folder  
+   - Navigate to `firmware/polyinoculator/`
+   - PlatformIO will detect the `platformio.ini` file
+
+2. **Flash Polyinoculator**:
+   - Connect Seeed XIAO ESP32-C3 via USB-C
+   - Press **Ctrl+Shift+P** → "PlatformIO: Upload"
+   - OR click Upload button (→) in PlatformIO toolbar
+
+### Method 2: Multi-Project Workspace (Advanced)
+
+1. **Create VS Code Workspace**:
+   ```json
+   {
+     "folders": [
+       { "path": "./tricorder" },
+       { "path": "./polyinoculator" }
+     ]
+   }
+   ```
+   
+2. **Save as**: `firmware/tricorder-workspace.code-workspace`
+
+3. **Switch Projects**: Use PlatformIO Project Tasks panel to select environment
+
+## Build Commands
+
+### Command Line Interface (Optional)
+```bash
+# Navigate to project folder
+cd firmware/tricorder/
+# or 
+cd firmware/polyinoculator/
+
+# Build only
+pio run
+
+# Build and upload
+pio run -t upload
+
+# Clean build
+pio run -t clean
+
+# Monitor serial output
+pio device monitor --baud 115200
+```
 
 ## Troubleshooting
 
@@ -121,7 +143,7 @@ Go to Tools → Manage Libraries and install:
 2. Set baud rate to 115200
 3. You should see:
    ```
-   Starting Tricorder Control System...
+   Starting Prop Control System...
    SD card initialized successfully!
    SD Card: OK
    Created /videos directory
@@ -154,22 +176,59 @@ Use the test script or send UDP commands:
 - **Video Playback**: Smooth display on TFT screen
 - **Serial Output**: Video status and debugging information
 
-## First Boot Verification
+## Verification
 
+### First Boot Check
 After successful flashing:
 
-1. **Display Check**: Screen should show "Tricorder Booting..." then status information
-2. **SD Card Check**: Should show "SD Card: OK" if card is inserted
-3. **WiFi Check**: Device should connect to "Rigging Electric" network  
-4. **LED Check**: Built-in RGB LED changes colors during boot sequence
-5. **Serial Check**: Open Serial Monitor to see full initialization process
+1. **Tricorder**:
+   - Display shows "Tricorder Booting..." then status information
+   - SD card check: "SD Card: OK" if card is inserted
+   - WiFi connection to "Rigging Electric" network
+   - Built-in RGB LED changes colors during boot
+   - Serial output at 115200 baud shows initialization
 
-## Video Playback Setup
+2. **Polyinoculator**:
+   - 12 LEDs briefly flash during boot
+   - WiFi connection to "Rigging Electric" network  
+   - Serial output shows device registration
+   - Responds to UDP commands on port 8888
 
+### Expected Serial Output
+
+**Tricorder**:
+```
+Starting Prop Control System...
+SD card initialized successfully!
+SD Card: OK
+Created /videos directory
+Found X video files
+WiFi connected!
+IP address: 192.168.x.x
+mDNS responder started: TRICORDER_[MAC].local
+Setup complete!
+```
+
+**Polyinoculator**:
+```
+Starting Polyinoculator Control System...
+Connecting to WiFi: Rigging Electric
+WiFi connected!
+IP address: 192.168.x.x  
+mDNS responder started: POLYINOCULATOR_001.local
+UDP server listening on port 8888
+Setup complete!
+```
+
+## Testing & Setup
+
+### Video Setup (Tricorder Only)
 1. **Prepare Videos**: Use provided scripts to convert videos to JPEG format
    ```bash
+   cd firmware/
    python generate_test_patterns.py  # Create test patterns
-   ./prepare_video.sh input.mp4      # Convert existing videos
+   ./prepare_video.sh input.mp4      # Convert existing videos (Linux/macOS)
+   ./prepare_video.bat input.mp4     # Convert existing videos (Windows)
    ```
 
 2. **SD Card Structure**:
@@ -181,17 +240,22 @@ After successful flashing:
        └── color_cycle.jpg
    ```
 
-3. **Test Video Playback**: Use the test script
+3. **Test Video Playback**: 
    ```bash
    python test_video.py [TRICORDER_IP]
    ```
 
-## Next Steps
+### LED Testing (Both Devices)
+Use the UDP command interface:
+```json
+{"action": "set_leds", "commandId": "test1", "parameters": {"color": "#FF0000"}}
+{"action": "set_leds_array", "commandId": "test2", "parameters": {"leds": ["#FF0000", "#00FF00", "#0000FF"]}}
+```
 
-1. **Add NeoPixel Strip**: Connect WS2812B LEDs to GPIO pin 2
-2. **Add SD Card**: Insert microSD card (32GB max, FAT32 format)
-3. **Test Commands**: Use the web interface or Python server to send commands
-4. **Network Discovery**: Device should appear on network as "TRICORDER_[MAC].local"
+### Network Discovery
+Both devices register mDNS services:
+- **Tricorder**: `TRICORDER_[MAC].local`
+- **Polyinoculator**: `POLYINOCULATOR_001.local`
 
 ## Pin Configuration Summary
 

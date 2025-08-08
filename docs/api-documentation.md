@@ -1,4 +1,4 @@
-# Tricorder Control System - API Documentation
+# Prop Control System - API Documentation
 
 ## Base URL
 ```

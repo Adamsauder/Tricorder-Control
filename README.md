@@ -1,4 +1,4 @@
-# Tricorder Control System
+# Prop Control System
 **Version 0.1**
 
 A comprehensive control system for ESP32-based film set props with embedded screens, NeoPixel LEDs, and Over-The-Air (OTA) firmware updates.
@@ -133,7 +133,7 @@ This system controls up to 20+ ESP32-based "tricorder" props, each featuring:
 
 - ✅ **Python 3.8+** with pip (tested with 3.11.9)
 - ✅ **Node.js 18+** for web development (tested with 22.17.1)
-- ✅ **PlatformIO** or Arduino IDE for ESP32 firmware
+- ✅ **PlatformIO** for ESP32 firmware development
 - ✅ **WiFi network** for device communication
 
 ### Installation
@@ -152,9 +152,13 @@ This system controls up to 20+ ESP32-based "tricorder" props, each featuring:
 
 3. **⚡ Flash ESP32 firmware:**
    ```bash
-   cd firmware
-   # Use PlatformIO: pio run --target upload
-   # Or Arduino IDE to flash src/main.cpp
+   # Tricorder
+   cd firmware/tricorder/
+   pio run -t upload
+   
+   # Polyinoculator  
+   cd firmware/polyinoculator/
+   pio run -t upload
    ```
 
 ### 🏃‍♂️ Running the System
@@ -235,7 +239,7 @@ This system controls up to 20+ ESP32-based "tricorder" props, each featuring:
 
 ## � **Web Interface Preview**
 
-![Tricorder Control Dashboard](dashboard-screenshot.png)
+![Prop Control Dashboard](dashboard-screenshot.png)
 
 *Professional React TypeScript dashboard with Material-UI components, featuring real-time device management, OTA firmware updates, and ESP32 simulator.*
 

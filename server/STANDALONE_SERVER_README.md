@@ -150,7 +150,7 @@ For Linux systems, create a systemd service file:
 
 ```ini
 [Unit]
-Description=Tricorder Control Server
+Description=Prop Control Server
 After=network.target
 
 [Service]

@@ -12,7 +12,7 @@ export default defineConfig({
       },
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
       manifest: {
-        name: 'Tricorder Control',
+        name: 'Prop Control',
         short_name: 'Tricorder',
         description: 'Film set prop control system',
         theme_color: '#1976d2',

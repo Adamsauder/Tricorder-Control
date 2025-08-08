@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test sACN functionality for the Tricorder Control System
+Test sACN functionality for the Prop Control System
 Tests API endpoints and basic functionality
 """
 

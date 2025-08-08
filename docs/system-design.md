@@ -1,8 +1,8 @@
-# Tricorder Control System - Design Document
+# Prop Control System - Design Document
 
 ## Executive Summary
 
-The Tricorder Control System is a centralized management platform for ESP32-based film set props. The system enables real-time control of video playback, LED lighting, and device configuration across up to 20 devices with sub-50ms latency for professional film production requirements.
+The Prop Control System is a centralized management platform for ESP32-based film set props. The system enables real-time control of video playback, LED lighting, and device configuration across up to 20 devices with sub-50ms latency for professional film production requirements.
 
 ## System Architecture
 
@@ -348,4 +348,4 @@ class Command:
 2. **LED Driver Failure**: Hardware component failure
    - *Mitigation*: Modular design, field-replaceable parts
 
-This design document provides the foundation for implementing a robust, scalable, and reliable tricorder control system suitable for professional film production environments.
+This design document provides the foundation for implementing a robust, scalable, and reliable prop control system suitable for professional film production environments.

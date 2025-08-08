@@ -27,8 +27,8 @@ from standalone_server import TricorderStandaloneServer, CONFIG
 
 class TricorderService(win32serviceutil.ServiceFramework if HAS_WIN32 else object):
     _svc_name_ = "TricorderControlServer"
-    _svc_display_name_ = "Tricorder Control Server"
-    _svc_description_ = "Standalone server for Tricorder Control System v0.1"
+    _svc_display_name_ = "Prop Control Server"
+    _svc_description_ = "Standalone server for Prop Control System v0.1"
     
     def __init__(self, args=None):
         if HAS_WIN32:
@@ -74,7 +74,7 @@ class TricorderService(win32serviceutil.ServiceFramework if HAS_WIN32 else objec
                 (self._svc_name_, '')
             )
         
-        self.logger.info("Tricorder Control Service starting...")
+        self.logger.info("Prop Control Service starting...")
         
         try:
             # Create and configure server
@@ -93,7 +93,7 @@ class TricorderService(win32serviceutil.ServiceFramework if HAS_WIN32 else objec
             if HAS_WIN32:
                 servicemanager.LogErrorMsg(f"Service error: {e}")
         
-        self.logger.info("Tricorder Control Service stopped")
+        self.logger.info("Prop Control Service stopped")
         
         if HAS_WIN32:
             servicemanager.LogMsg(

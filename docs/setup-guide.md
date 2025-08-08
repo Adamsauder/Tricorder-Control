@@ -378,4 +378,4 @@ command_counter = Counter('commands_total', 'Total commands processed')
 - Firmware version control
 - File storage redundancy
 
-This guide should get you up and running with the Tricorder Control System. For additional help, consult the API documentation and system design documents.
+This guide should get you up and running with the Prop Control System. For additional help, consult the API documentation and system design documents.

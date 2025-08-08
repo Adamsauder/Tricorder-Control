@@ -171,4 +171,4 @@ python test_firmware_updates.py
 
 ## 🎉 Success!
 
-Your Tricorder Control System now supports wireless firmware updates! No more USB cables required for device maintenance and updates.
+Your Prop Control System now supports wireless firmware updates! No more USB cables required for device maintenance and updates.

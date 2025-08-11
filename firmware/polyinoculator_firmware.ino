@@ -1,7 +1,7 @@
 /*
  * Polyinoculator Control Firmware
  * Seeed Studio XIAO ESP32-C3 based prop controller
- * Multi-strip WS2812B LEDs controlled via SACN (E1.31) protocol
+ * 12x WS2812B LEDs controlled via SACN (E1.31) protocol
  */
 
 #include <WiFi.h>
@@ -10,15 +10,9 @@
 #include <ArduinoJson.h>
 #include <FastLED.h>
 
-// Pin definitions for Seeed Studio XIAO ESP32-C3 - Multi-strip configuration
-// Note: Avoiding GPIO0/1 (boot/UART conflicts), GPIO2/8/9 (strapping pins)
-#define LED_PIN_1 10       // Strip 1: 7 pixels on GPIO10
-#define LED_PIN_2 4        // Strip 2: 4 pixels on GPIO4 (changed from GPIO0)
-#define LED_PIN_3 5        // Strip 3: 4 pixels on GPIO5 (changed from GPIO1)
-#define NUM_LEDS_1 7       // Strip 1 length
-#define NUM_LEDS_2 4       // Strip 2 length
-#define NUM_LEDS_3 4       // Strip 3 length
-#define TOTAL_LEDS 15      // Total: 7 + 4 + 4 = 15 pixels
+// Pin definitions for Seeed Studio XIAO ESP32-C3
+#define LED_PIN 10         // NeoPixel data pin - D10/GPIO10 (recommended for XIAO C3)
+#define NUM_LEDS 12        // Number of WS2812B pixels
 #define STATUS_LED_PIN 3   // Optional status LED pin
 
 // Network configuration
@@ -29,14 +23,12 @@ const int UDP_PORT = 8888;
 
 // Device identification
 String deviceId = "POLYINOCULATOR_001";
-String firmwareVersion = "0.2";
+String firmwareVersion = "0.1";
 int sacnUniverse = 1;  // SACN universe for this device (configurable)
-int sacnStartAddress = 4;  // Starting DMX address (channels 4-48 for 15 LEDs)
+int sacnStartAddress = 4;  // Starting DMX address (channels 4-39 for 12 LEDs)
 
-// Hardware objects - Separate arrays for each strip
-CRGB leds1[NUM_LEDS_1];  // Strip 1: GPIO10, 7 LEDs
-CRGB leds2[NUM_LEDS_2];  // Strip 2: GPIO4, 4 LEDs (changed from GPIO0)
-CRGB leds3[NUM_LEDS_3];  // Strip 3: GPIO5, 4 LEDs (changed from GPIO1)
+// Hardware objects
+CRGB leds[NUM_LEDS];
 WiFiUDP udp;
 
 // State variables
@@ -51,8 +43,7 @@ const unsigned long STATUS_INTERVAL = 10000; // Send status every 10 seconds
 
 // Function declarations
 void handleUDPCommands();
-void setAllLEDColor(int r, int g, int b);
-void setStripColor(int stripNum, int r, int g, int b);
+void setLEDColor(int r, int g, int b);
 void setLEDBrightness(int brightness);
 void setIndividualLED(int ledIndex, int r, int g, int b);
 void rainbow();
@@ -66,15 +57,9 @@ void processNetworkCommand(String jsonCommand);
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting Polyinoculator Control System...");
-  Serial.printf("Multi-strip configuration: Strip1=%d LEDs, Strip2=%d LEDs, Strip3=%d LEDs\n", 
-                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
-  Serial.printf("Pin assignments: GPIO10=%d LEDs, GPIO4=%d LEDs, GPIO5=%d LEDs\n",
-                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
   
-  // Initialize LED strips - Multi-pin configuration
-  FastLED.addLeds<WS2812B, LED_PIN_1, GRB>(leds1, NUM_LEDS_1);  // Strip 1: GPIO10, 7 LEDs
-  FastLED.addLeds<WS2812B, LED_PIN_2, GRB>(leds2, NUM_LEDS_2);  // Strip 2: GPIO4, 4 LEDs
-  FastLED.addLeds<WS2812B, LED_PIN_3, GRB>(leds3, NUM_LEDS_3);  // Strip 3: GPIO5, 4 LEDs
+  // Initialize LEDs
+  FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
   FastLED.setBrightness(ledBrightness);
   
   // Optional status LED (if available)
@@ -95,11 +80,9 @@ void setup() {
     Serial.print(".");
     attempts++;
     
-    // Breathing effect during WiFi connection - all strips
+    // Breathing effect during WiFi connection
     int brightness = (sin(attempts * 0.3) + 1) * 64;
-    fill_solid(leds1, NUM_LEDS_1, CRGB(0, 0, brightness));
-    fill_solid(leds2, NUM_LEDS_2, CRGB(0, 0, brightness));
-    fill_solid(leds3, NUM_LEDS_3, CRGB(0, 0, brightness));
+    fill_solid(leds, NUM_LEDS, CRGB(0, 0, brightness));
     FastLED.show();
   }
   
@@ -118,41 +101,25 @@ void setup() {
       MDNS.addService("polyinoculator", "udp", UDP_PORT);
     }
     
-    // Success LED pattern - light up all strips sequentially
-    for (int i = 0; i < NUM_LEDS_1; i++) {
-      leds1[i] = CRGB::Green;
-      FastLED.show();
-      delay(50);
-    }
-    for (int i = 0; i < NUM_LEDS_2; i++) {
-      leds2[i] = CRGB::Green;
-      FastLED.show();
-      delay(50);
-    }
-    for (int i = 0; i < NUM_LEDS_3; i++) {
-      leds3[i] = CRGB::Green;
+    // Success LED pattern
+    for (int i = 0; i < NUM_LEDS; i++) {
+      leds[i] = CRGB::Green;
       FastLED.show();
       delay(50);
     }
     delay(500);
-    fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-    fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-    fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
     
     digitalWrite(STATUS_LED_PIN, HIGH); // Status LED on when connected
   } else {
     Serial.println("\nFailed to connect to WiFi");
-    // Error LED pattern - flash all strips red
+    // Error LED pattern
     for (int i = 0; i < 5; i++) {
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Red);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Red);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Red);
+      fill_solid(leds, NUM_LEDS, CRGB::Red);
       FastLED.show();
       delay(200);
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
+      fill_solid(leds, NUM_LEDS, CRGB::Black);
       FastLED.show();
       delay(200);
     }
@@ -182,20 +149,14 @@ void loop() {
     
     if (!currentWifiStatus) {
       Serial.println("WiFi disconnected!");
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Red);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Red);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Red);
+      fill_solid(leds, NUM_LEDS, CRGB::Red);
       FastLED.show();
     } else {
       Serial.println("WiFi reconnected!");
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Green);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Green);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Green);
+      fill_solid(leds, NUM_LEDS, CRGB::Green);
       FastLED.show();
       delay(500);
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
+      fill_solid(leds, NUM_LEDS, CRGB::Black);
       FastLED.show();
     }
     lastWifiStatus = currentWifiStatus;
@@ -236,10 +197,7 @@ void processNetworkCommand(String jsonCommand) {
       response["type"] = "polyinoculator";
       response["firmwareVersion"] = firmwareVersion;
       response["ipAddress"] = WiFi.localIP().toString();
-      response["numLeds"] = TOTAL_LEDS;
-      response["numLeds1"] = NUM_LEDS_1;
-      response["numLeds2"] = NUM_LEDS_2;
-      response["numLeds3"] = NUM_LEDS_3;
+      response["numLeds"] = NUM_LEDS;
       response["sacnUniverse"] = sacnUniverse;
       
       String responseStr;
@@ -252,7 +210,7 @@ void processNetworkCommand(String jsonCommand) {
       int r = doc["r"];
       int g = doc["g"];
       int b = doc["b"];
-      setAllLEDColor(r, g, b);
+      setLEDColor(r, g, b);
       sendResponse(commandId, "LED color set");
     }
     else if (action == "set_brightness") {
@@ -272,14 +230,15 @@ void processNetworkCommand(String jsonCommand) {
       // Command for setting multiple LEDs at once (used by SACN)
       if (doc.containsKey("leds") && doc["leds"].is<JsonArray>()) {
         JsonArray ledsArray = doc["leds"];
-        for (int i = 0; i < ledsArray.size() && i < TOTAL_LEDS; i++) {
+        for (int i = 0; i < ledsArray.size() && i < NUM_LEDS; i++) {
           if (ledsArray[i].is<JsonArray>() && ledsArray[i].size() >= 3) {
             int r = ledsArray[i][0];
             int g = ledsArray[i][1];
             int b = ledsArray[i][2];
-            setIndividualLED(i, r, g, b); // Use our function that handles strip mapping
+            leds[i] = CRGB(r, g, b);
           }
         }
+        FastLED.show();
         sendResponse(commandId, "LED array set");
       } else {
         sendResponse(commandId, "Invalid LED array format");
@@ -313,33 +272,11 @@ void processNetworkCommand(String jsonCommand) {
   }
 }
 
-void setAllLEDColor(int r, int g, int b) {
+void setLEDColor(int r, int g, int b) {
   currentColor = CRGB(r, g, b);
-  fill_solid(leds1, NUM_LEDS_1, currentColor);
-  fill_solid(leds2, NUM_LEDS_2, currentColor);
-  fill_solid(leds3, NUM_LEDS_3, currentColor);
+  fill_solid(leds, NUM_LEDS, currentColor);
   FastLED.show();
-  Serial.printf("All LED strips set to R:%d G:%d B:%d\n", r, g, b);
-}
-
-void setStripColor(int stripNum, int r, int g, int b) {
-  CRGB color = CRGB(r, g, b);
-  switch(stripNum) {
-    case 1:
-      fill_solid(leds1, NUM_LEDS_1, color);
-      break;
-    case 2:
-      fill_solid(leds2, NUM_LEDS_2, color);
-      break;
-    case 3:
-      fill_solid(leds3, NUM_LEDS_3, color);
-      break;
-    default:
-      Serial.printf("Invalid strip number: %d\n", stripNum);
-      return;
-  }
-  FastLED.show();
-  Serial.printf("Strip %d set to R:%d G:%d B:%d\n", stripNum, r, g, b);
+  Serial.printf("LED color set to R:%d G:%d B:%d\n", r, g, b);
 }
 
 void setLEDBrightness(int brightness) {
@@ -350,21 +287,8 @@ void setLEDBrightness(int brightness) {
 }
 
 void setIndividualLED(int ledIndex, int r, int g, int b) {
-  // Map global LED index to strip and local index
-  if (ledIndex >= 0 && ledIndex < TOTAL_LEDS) {
-    CRGB color = CRGB(r, g, b);
-    
-    if (ledIndex < NUM_LEDS_1) {
-      // Strip 1: LEDs 0-6
-      leds1[ledIndex] = color;
-    } else if (ledIndex < NUM_LEDS_1 + NUM_LEDS_2) {
-      // Strip 2: LEDs 7-10
-      leds2[ledIndex - NUM_LEDS_1] = color;
-    } else {
-      // Strip 3: LEDs 11-14
-      leds3[ledIndex - NUM_LEDS_1 - NUM_LEDS_2] = color;
-    }
-    
+  if (ledIndex >= 0 && ledIndex < NUM_LEDS) {
+    leds[ledIndex] = CRGB(r, g, b);
     FastLED.show();
     Serial.printf("LED %d set to R:%d G:%d B:%d\n", ledIndex, r, g, b);
   }
@@ -372,17 +296,8 @@ void setIndividualLED(int ledIndex, int r, int g, int b) {
 
 void rainbow() {
   for (int j = 0; j < 256; j++) {
-    // Strip 1: 7 LEDs
-    for (int i = 0; i < NUM_LEDS_1; i++) {
-      leds1[i] = CHSV(((i * 256 / NUM_LEDS_1) + j) & 255, 255, 255);
-    }
-    // Strip 2: 4 LEDs
-    for (int i = 0; i < NUM_LEDS_2; i++) {
-      leds2[i] = CHSV(((i * 256 / NUM_LEDS_2) + j + 85) & 255, 255, 255); // Offset hue
-    }
-    // Strip 3: 4 LEDs
-    for (int i = 0; i < NUM_LEDS_3; i++) {
-      leds3[i] = CHSV(((i * 256 / NUM_LEDS_3) + j + 170) & 255, 255, 255); // Different offset
+    for (int i = 0; i < NUM_LEDS; i++) {
+      leds[i] = CHSV(((i * 256 / NUM_LEDS) + j) & 255, 255, 255);
     }
     FastLED.show();
     delay(10);
@@ -392,40 +307,21 @@ void rainbow() {
 void scannerEffect(int r, int g, int b, int delayMs) {
   CRGB color = CRGB(r, g, b);
   
-  // Clear all strips
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-  
-  // Scan through Strip 1 (7 LEDs)
-  for (int i = 0; i < NUM_LEDS_1; i++) {
-    fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-    leds1[i] = color;
+  // Scan left to right
+  for (int i = 0; i < NUM_LEDS; i++) {
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    leds[i] = color;
     FastLED.show();
     delay(delayMs);
   }
   
-  // Scan through Strip 2 (4 LEDs)
-  for (int i = 0; i < NUM_LEDS_2; i++) {
-    fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-    leds2[i] = color;
+  // Scan right to left
+  for (int i = NUM_LEDS - 2; i >= 1; i--) {
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    leds[i] = color;
     FastLED.show();
     delay(delayMs);
   }
-  
-  // Scan through Strip 3 (4 LEDs)
-  for (int i = 0; i < NUM_LEDS_3; i++) {
-    fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-    leds3[i] = color;
-    FastLED.show();
-    delay(delayMs);
-  }
-  
-  // Clear all again
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-  FastLED.show();
 }
 
 void pulseEffect(int r, int g, int b, int duration) {
@@ -439,16 +335,12 @@ void pulseEffect(int r, int g, int b, int duration) {
     CRGB dimmedColor = color;
     dimmedColor.nscale8(255 * brightness);
     
-    fill_solid(leds1, NUM_LEDS_1, dimmedColor);
-    fill_solid(leds2, NUM_LEDS_2, dimmedColor);
-    fill_solid(leds3, NUM_LEDS_3, dimmedColor);
+    fill_solid(leds, NUM_LEDS, dimmedColor);
     FastLED.show();
     delay(20);
   }
   
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();
 }
 
@@ -476,7 +368,7 @@ void sendStatus(String commandId) {
   doc["ipAddress"] = WiFi.localIP().toString();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["uptime"] = millis();
-  doc["numLeds"] = TOTAL_LEDS;
+  doc["numLeds"] = NUM_LEDS;
   doc["brightness"] = ledBrightness;
   doc["sacnEnabled"] = sacnEnabled;
   doc["sacnUniverse"] = sacnUniverse;
@@ -498,7 +390,7 @@ void sendPeriodicStatus() {
   doc["ipAddress"] = WiFi.localIP().toString();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["uptime"] = millis();
-  doc["numLeds"] = TOTAL_LEDS;
+  doc["numLeds"] = NUM_LEDS;
   doc["brightness"] = ledBrightness;
   doc["sacnEnabled"] = sacnEnabled;
   doc["sacnUniverse"] = sacnUniverse;

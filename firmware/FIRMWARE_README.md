@@ -28,8 +28,11 @@ firmware/
 ### 🔸 **Polyinoculator (Seeed XIAO ESP32-C3)**
 - **Location**: `polyinoculator/src/main.cpp`
 - **PlatformIO Environment**: `[env:polyinoculator]`
-- **Hardware**: ESP32-C3 with 12x WS2812B LEDs
-- **Features**: LED array control, WiFi control, sACN support
+- **Hardware**: ESP32-C3 with 15x WS2812B LEDs across 3 strips
+  - Strip 1: 7 LEDs on GPIO10
+  - Strip 2: 4 LEDs on GPIO4 (avoiding GPIO0 boot conflicts)
+  - Strip 3: 4 LEDs on GPIO5 (avoiding GPIO1 UART conflicts)
+- **Features**: Multi-strip LED control, WiFi control, sACN support
 
 ## Build Instructions
 

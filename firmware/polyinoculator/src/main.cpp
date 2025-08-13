@@ -11,10 +11,10 @@
 #include <FastLED.h>
 
 // Pin definitions for Seeed Studio XIAO ESP32-C3 - Multi-strip configuration
-// Note: Avoiding GPIO0/1 (boot/UART conflicts), GPIO2/8/9 (strapping pins)
-#define LED_PIN_1 10       // Strip 1: 7 pixels on GPIO10
-#define LED_PIN_2 4        // Strip 2: 4 pixels on GPIO4 (changed from GPIO0)
-#define LED_PIN_3 5        // Strip 3: 4 pixels on GPIO5 (changed from GPIO1)
+// Note: Using digital pin numbers (D10, D3, D4) - preserves USB-JTAG functionality
+#define LED_PIN_1 D10      // Strip 1: 7 pixels on D10 (GPIO18 - USB-JTAG but can be overridden)
+#define LED_PIN_2 D3       // Strip 2: 4 pixels on D3 (GPIO21)
+#define LED_PIN_3 D4       // Strip 3: 4 pixels on D4 (GPIO6)
 #define NUM_LEDS_1 7       // Strip 1 length
 #define NUM_LEDS_2 4       // Strip 2 length
 #define NUM_LEDS_3 4       // Strip 3 length
@@ -34,9 +34,9 @@ int sacnUniverse = 1;  // SACN universe for this device (configurable)
 int sacnStartAddress = 4;  // Starting DMX address (channels 4-48 for 15 LEDs)
 
 // Hardware objects - Separate arrays for each strip
-CRGB leds1[NUM_LEDS_1];  // Strip 1: GPIO10, 7 LEDs
-CRGB leds2[NUM_LEDS_2];  // Strip 2: GPIO4, 4 LEDs (changed from GPIO0)
-CRGB leds3[NUM_LEDS_3];  // Strip 3: GPIO5, 4 LEDs (changed from GPIO1)
+CRGB leds1[NUM_LEDS_1];  // Strip 1: D10 (GPIO18), 7 LEDs
+CRGB leds2[NUM_LEDS_2];  // Strip 2: D3 (GPIO21), 4 LEDs
+CRGB leds3[NUM_LEDS_3];  // Strip 3: D4 (GPIO6), 4 LEDs
 WiFiUDP udp;
 
 // State variables
@@ -68,14 +68,59 @@ void setup() {
   Serial.println("Starting Polyinoculator Control System...");
   Serial.printf("Multi-strip configuration: Strip1=%d LEDs, Strip2=%d LEDs, Strip3=%d LEDs\n", 
                 NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
-  Serial.printf("Pin assignments: GPIO10=%d LEDs, GPIO4=%d LEDs, GPIO5=%d LEDs\n",
+  Serial.printf("Pin assignments: D10=%d LEDs, D3=%d LEDs, D4=%d LEDs\n",
                 NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
   
-  // Initialize LED strips - Multi-pin configuration
-  FastLED.addLeds<WS2812B, LED_PIN_1, GRB>(leds1, NUM_LEDS_1);  // Strip 1: GPIO10, 7 LEDs
-  FastLED.addLeds<WS2812B, LED_PIN_2, GRB>(leds2, NUM_LEDS_2);  // Strip 2: GPIO4, 4 LEDs
-  FastLED.addLeds<WS2812B, LED_PIN_3, GRB>(leds3, NUM_LEDS_3);  // Strip 3: GPIO5, 4 LEDs
+  // Initialize LED strips - Multi-pin configuration with alternate color orders
+  // Note: Some WS2812 strips use RGB instead of GRB color order
+  FastLED.addLeds<WS2812B, LED_PIN_1, GRB>(leds1, NUM_LEDS_1);  // Strip 1: D10 (GPIO18), 7 LEDs
+  FastLED.addLeds<WS2812B, LED_PIN_2, GRB>(leds2, NUM_LEDS_2);  // Strip 2: D3 (GPIO21), 4 LEDs
+  FastLED.addLeds<WS2812B, LED_PIN_3, GRB>(leds3, NUM_LEDS_3);  // Strip 3: D4 (GPIO6), 4 LEDs
+  
+  // Try different color order if GRB doesn't work:
+  // FastLED.addLeds<WS2812, LED_PIN_2, RGB>(leds2, NUM_LEDS_2);  // Alternative for Strip 2
+  // FastLED.addLeds<WS2812, LED_PIN_3, RGB>(leds3, NUM_LEDS_3);  // Alternative for Strip 3
+  
   FastLED.setBrightness(ledBrightness);
+  
+  // Clear all LEDs first
+  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
+  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
+  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
+  FastLED.show();
+  delay(500);
+  
+  // Test each strip individually for diagnostics
+  Serial.println("Testing strips individually...");
+  
+  // Test Strip 1 - Red
+  Serial.println("Testing Strip 1 (D10/GPIO18) - RED");
+  fill_solid(leds1, NUM_LEDS_1, CRGB::Red);
+  FastLED.show();
+  delay(2000);
+  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
+  FastLED.show();
+  delay(500);
+  
+  // Test Strip 2 - Green  
+  Serial.println("Testing Strip 2 (D3/GPIO21) - GREEN");
+  fill_solid(leds2, NUM_LEDS_2, CRGB::Green);
+  FastLED.show();
+  delay(2000);
+  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
+  FastLED.show();
+  delay(500);
+  
+  // Test Strip 3 - Blue
+  Serial.println("Testing Strip 3 (D4/GPIO6) - BLUE");
+  fill_solid(leds3, NUM_LEDS_3, CRGB::Blue);
+  FastLED.show();
+  delay(2000);
+  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
+  FastLED.show();
+  delay(1000);
+  
+  Serial.println("Strip testing complete. Check which colors appeared.");
   
   // Optional status LED (if available)
   pinMode(STATUS_LED_PIN, OUTPUT);

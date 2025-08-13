@@ -26,12 +26,20 @@ Changed LED strip pin assignments to avoid conflicts:
 #define LED_PIN_3 1        // Strip 3: 4 pixels on GPIO1  ❌ UART conflict
 ```
 
-### New Configuration (RECOMMENDED):
+### New Configuration (FINAL - RECOMMENDED):
 ```cpp
 #define LED_PIN_1 10       // Strip 1: 7 pixels on GPIO10 ✅ OK
-#define LED_PIN_2 4        // Strip 2: 4 pixels on GPIO4  ✅ Safe GPIO
-#define LED_PIN_3 5        // Strip 3: 4 pixels on GPIO5  ✅ Safe GPIO
+#define LED_PIN_2 6        // Strip 2: 4 pixels on GPIO6  ✅ Safe GPIO (no ADC)
+#define LED_PIN_3 7        // Strip 3: 4 pixels on GPIO7  ✅ Safe GPIO (no ADC)
 ```
+
+## Issue Resolution - ADC Conflict Discovery
+After initial attempt with GPIO4/5, discovered additional conflicts:
+- **GPIO4**: ADC1_CH4 pin - can interfere with digital output
+- **GPIO5**: ADC2_CH0 pin - ADC2 particularly problematic for digital output
+
+## Final Solution Applied
+Changed to GPIO6 and GPIO7 which have **no special functions** and are guaranteed safe.
 
 ## Safe GPIO Pins on ESP32-C3
 For the Seeed XIAO ESP32-C3, the following pins are recommended for general GPIO use:
@@ -44,8 +52,8 @@ You'll need to rewire your LED strips:
 
 ### Strip Connections:
 1. **Strip 1 (7 LEDs)**: Connect to **GPIO10** (unchanged)
-2. **Strip 2 (4 LEDs)**: Move from GPIO0 to **GPIO4**
-3. **Strip 3 (4 LEDs)**: Move from GPIO1 to **GPIO5**
+2. **Strip 2 (4 LEDs)**: Move from GPIO0 to **GPIO6** (final)
+3. **Strip 3 (4 LEDs)**: Move from GPIO1 to **GPIO7** (final)
 
 ### Power & Ground:
 - All strips: Connect VCC to 3.3V or 5V

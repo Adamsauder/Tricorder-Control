@@ -6,8 +6,8 @@ echo.
 echo Flashing ESP32-C3 Polyinoculator firmware...
 echo Hardware Configuration:
 echo   - Strip 1: 7 LEDs on GPIO10
-echo   - Strip 2: 4 LEDs on GPIO4  
-echo   - Strip 3: 4 LEDs on GPIO5
+echo   - Strip 2: 4 LEDs on GPIO6  
+echo   - Strip 3: 4 LEDs on GPIO7
 echo   - Total: 15 LEDs across 3 strips
 echo.
 echo Make sure your Seeed XIAO ESP32-C3 is connected via USB-C

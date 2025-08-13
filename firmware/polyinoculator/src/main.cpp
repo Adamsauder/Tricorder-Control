@@ -1,7 +1,37 @@
 /*
  * Polyinoculator Control Firmware
- * Seeed Studio XIAO ESP32-C3 based prop controller
+ * Se// Hardware objects - Separate arrays for eacvoid setup() {
+  Serial.begin(115200);
+  Serial.println("Starting Enhanced Polyinoculator Control System...");
+  
+  // Initialize configuration system
+  if (!propConfig.begin()) {
+    Serial.println("ERROR: Failed to initialize configuration storage!");
+    return;
+  }
+  
+  // Load configuration
+  loadConfiguration();
+  
+  Serial.printf("Device: %s (%s)\n", deviceLabel.c_str(), deviceId.c_str());
+  Serial.printf("Multi-strip configuration: Strip1=%d LEDs, Strip2=%d LEDs, Strip3=%d LEDs\n", 
+                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
+  Serial.printf("Pin assignments: D5=%d LEDs, D6=%d LEDs, D8=%d LEDs\n",
+                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
+  Serial.printf("SACN Universe: %d, DMX Start: %d, Brightness: %d\n",
+                sacnUniverse, sacnStartAddress, ledBrightness);
+CRGB leds1[NUM_LEDS_1];  // Strip 1: D5 (GPIO5), 7 LEDs
+CRGB leds2[NUM_LEDS_2];  // Strip 2: D6 (GPIO16), 4 LEDs
+CRGB leds3[NUM_LEDS_3];  // Strip 3: D8 (GPIO20), 4 LEDs
+WiFiUDP udp;
+WebServer webServer(80);
+
+// State variables
+bool wifiConnected = false;
+CRGB currentColor = CRGB::Black;
+bool sacnEnabled = true;XIAO ESP32-C3 based prop controller
  * Multi-strip WS2812B LEDs controlled via SACN (E1.31) protocol
+ * Enhanced with persistent configuration storage
  */
 
 #include <WiFi.h>
@@ -9,6 +39,8 @@
 #include <WiFiUdp.h>
 #include <ArduinoJson.h>
 #include <FastLED.h>
+#include <WebServer.h>
+#include "PropConfig.h"
 
 // Pin definitions for Seeed Studio XIAO ESP32-C3 - Multi-strip configuration
 // Note: Using digital pin numbers (D10, D3, D4) - preserves USB-JTAG functionality
@@ -21,17 +53,24 @@
 #define TOTAL_LEDS 15      // Total: 7 + 4 + 4 = 15 pixels
 #define STATUS_LED_PIN 3   // Optional status LED pin
 
-// Network configuration
-const char* WIFI_SSID = "Rigging Electric";
-const char* WIFI_PASSWORD = "academy123";
-const int UDP_PORT = 8888;
-// SACN will be controlled via UDP commands from server, not direct processing
+// Network configuration - loaded from persistent storage
+PropConfig propConfig;
+PropConfig::Config config;
 
-// Device identification
-String deviceId = "POLYINOCULATOR_001";
-String firmwareVersion = "0.2";
-int sacnUniverse = 1;  // SACN universe for this device (configurable)
-int sacnStartAddress = 4;  // Starting DMX address (channels 4-48 for 15 LEDs)
+// Network defaults (overridden by stored config)
+const int UDP_PORT = 8888;
+const int WEB_PORT = 80;
+
+// Hardware configuration - now configurable
+String deviceId;
+String deviceLabel;
+String firmwareVersion = "0.3";
+int sacnUniverse;
+int sacnStartAddress;
+int totalLEDs;
+int ledBrightness;
+String wifiSSID;
+String wifiPassword;
 
 // Hardware objects - Separate arrays for each strip
 CRGB leds1[NUM_LEDS_1];  // Strip 1: D10 (GPIO18), 7 LEDs
@@ -50,6 +89,11 @@ unsigned long lastStatusSend = 0;
 const unsigned long STATUS_INTERVAL = 10000; // Send status every 10 seconds
 
 // Function declarations
+void loadConfiguration();
+void setupWebServer();
+void handleGetConfig();
+void handleSetConfig();
+void handleFactoryReset();
 void handleUDPCommands();
 void setAllLEDColor(int r, int g, int b);
 void setStripColor(int stripNum, int r, int g, int b);
@@ -129,10 +173,10 @@ void setup() {
   // Startup LED effect
   rainbow();
   
-  // Initialize WiFi
-  Serial.println("Connecting to WiFi...");
+  // Initialize WiFi using stored credentials
+  Serial.printf("Connecting to WiFi: %s\n", wifiSSID.c_str());
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
   
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 40) { // 20 second timeout
@@ -152,6 +196,9 @@ void setup() {
     wifiConnected = true;
     Serial.println("\nWiFi connected!");
     Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
+    
+    // Setup web server for configuration API
+    setupWebServer();
     
     // Initialize UDP for control commands
     udp.begin(UDP_PORT);
@@ -207,6 +254,11 @@ void setup() {
 }
 
 void loop() {
+  // Handle web server requests
+  if (wifiConnected) {
+    webServer.handleClient();
+  }
+  
   // Handle UDP control commands
   handleUDPCommands();
   
@@ -540,13 +592,15 @@ void sendPeriodicStatus() {
   doc["type"] = "polyinoculator";
   doc["firmwareVersion"] = firmwareVersion;
   doc["wifiConnected"] = wifiConnected;
+  doc["deviceLabel"] = deviceLabel;
   doc["ipAddress"] = WiFi.localIP().toString();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["uptime"] = millis();
-  doc["numLeds"] = TOTAL_LEDS;
+  doc["numLeds"] = totalLEDs;
   doc["brightness"] = ledBrightness;
   doc["sacnEnabled"] = sacnEnabled;
   doc["sacnUniverse"] = sacnUniverse;
+  doc["dmxStartAddress"] = sacnStartAddress;
   doc["timestamp"] = millis();
   
   String statusMsg;
@@ -559,4 +613,177 @@ void sendPeriodicStatus() {
   udp.beginPacket(serverIP, UDP_PORT);
   udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
   udp.endPacket();
+}
+
+// Configuration management functions
+void loadConfiguration() {
+  if (propConfig.loadConfig(config)) {
+    deviceId = config.deviceLabel.substring(0, config.deviceLabel.indexOf('_')) + "_" + String(random(1000, 9999));
+    deviceLabel = config.deviceLabel;
+    sacnUniverse = config.sacnUniverse;
+    sacnStartAddress = config.dmxStartAddress;
+    totalLEDs = config.numLeds;
+    ledBrightness = config.brightness;
+    wifiSSID = config.wifiSSID;
+    wifiPassword = config.wifiPassword;
+    
+    if (config.firstBoot) {
+      Serial.println("First boot detected - using defaults");
+      propConfig.setFirstBoot(false);
+    }
+  } else {
+    Serial.println("Failed to load config - using defaults");
+    // Set defaults
+    deviceId = "POLYINOCULATOR_" + String(random(1000, 9999));
+    deviceLabel = "Polyinoculator " + String(random(100, 999));
+    sacnUniverse = 1;
+    sacnStartAddress = 1;
+    totalLEDs = TOTAL_LEDS;
+    ledBrightness = 128;
+    wifiSSID = "Rigging Electric";
+    wifiPassword = "academy123";
+    
+    // Save defaults
+    config.deviceLabel = deviceLabel;
+    config.sacnUniverse = sacnUniverse;
+    config.dmxStartAddress = sacnStartAddress;
+    config.numLeds = totalLEDs;
+    config.brightness = ledBrightness;
+    config.wifiSSID = wifiSSID;
+    config.wifiPassword = wifiPassword;
+    config.deviceType = "polyinoculator";
+    config.firstBoot = false;
+    propConfig.saveConfig(config);
+  }
+  
+  Serial.println("Configuration loaded:");
+  propConfig.printConfig();
+}
+
+void setupWebServer() {
+  // Configuration API endpoints
+  webServer.on("/api/config", HTTP_GET, handleGetConfig);
+  webServer.on("/api/config", HTTP_POST, handleSetConfig);
+  webServer.on("/api/factory-reset", HTTP_POST, handleFactoryReset);
+  
+  // CORS headers for web interface
+  webServer.enableCORS(true);
+  
+  webServer.begin();
+  Serial.printf("Web server started on port %d\n", WEB_PORT);
+}
+
+void handleGetConfig() {
+  JsonDocument doc;
+  doc["deviceId"] = deviceId;
+  doc["deviceLabel"] = deviceLabel;
+  doc["deviceType"] = "polyinoculator";
+  doc["firmwareVersion"] = firmwareVersion;
+  doc["sacnUniverse"] = sacnUniverse;
+  doc["dmxStartAddress"] = sacnStartAddress;
+  doc["numLeds"] = totalLEDs;
+  doc["brightness"] = ledBrightness;
+  doc["wifiSSID"] = wifiSSID;
+  doc["online"] = true;
+  doc["ipAddress"] = WiFi.localIP().toString();
+  doc["uptime"] = millis();
+  doc["freeHeap"] = ESP.getFreeHeap();
+  
+  String response;
+  serializeJson(doc, response);
+  webServer.send(200, "application/json", response);
+}
+
+void handleSetConfig() {
+  if (!webServer.hasArg("plain")) {
+    webServer.send(400, "application/json", "{\"error\":\"No JSON data\"}");
+    return;
+  }
+  
+  String body = webServer.arg("plain");
+  JsonDocument doc;
+  
+  if (deserializeJson(doc, body) != DeserializationError::Ok) {
+    webServer.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+  
+  bool configChanged = false;
+  
+  // Update configuration
+  if (doc.containsKey("deviceLabel")) {
+    String newLabel = doc["deviceLabel"].as<String>();
+    if (newLabel != deviceLabel) {
+      deviceLabel = newLabel;
+      propConfig.setDeviceLabel(newLabel);
+      configChanged = true;
+    }
+  }
+  
+  if (doc.containsKey("sacnUniverse")) {
+    int newUniverse = doc["sacnUniverse"];
+    if (newUniverse != sacnUniverse && newUniverse >= 1 && newUniverse <= 63999) {
+      sacnUniverse = newUniverse;
+      propConfig.setSACNUniverse(newUniverse);
+      configChanged = true;
+    }
+  }
+  
+  if (doc.containsKey("dmxStartAddress")) {
+    int newAddress = doc["dmxStartAddress"];
+    if (newAddress != sacnStartAddress && newAddress >= 1 && newAddress <= 512) {
+      sacnStartAddress = newAddress;
+      propConfig.setDMXStartAddress(newAddress);
+      configChanged = true;
+    }
+  }
+  
+  if (doc.containsKey("brightness")) {
+    int newBrightness = doc["brightness"];
+    if (newBrightness != ledBrightness && newBrightness >= 0 && newBrightness <= 255) {
+      ledBrightness = newBrightness;
+      propConfig.setBrightness(newBrightness);
+      FastLED.setBrightness(ledBrightness);
+      configChanged = true;
+    }
+  }
+  
+  if (doc.containsKey("wifiSSID")) {
+    String newSSID = doc["wifiSSID"].as<String>();
+    if (newSSID != wifiSSID) {
+      wifiSSID = newSSID;
+      propConfig.setWiFiSSID(newSSID);
+      configChanged = true;
+    }
+  }
+  
+  if (doc.containsKey("wifiPassword")) {
+    String newPassword = doc["wifiPassword"].as<String>();
+    if (newPassword != wifiPassword) {
+      wifiPassword = newPassword;
+      propConfig.setWiFiPassword(newPassword);
+      configChanged = true;
+    }
+  }
+  
+  if (configChanged) {
+    Serial.println("Configuration updated via API");
+    propConfig.printConfig();
+    webServer.send(200, "application/json", "{\"status\":\"updated\"}");
+  } else {
+    webServer.send(200, "application/json", "{\"status\":\"no_changes\"}");
+  }
+}
+
+void handleFactoryReset() {
+  Serial.println("Factory reset requested via API");
+  
+  if (propConfig.factoryReset()) {
+    webServer.send(200, "application/json", "{\"status\":\"reset_scheduled\"}");
+    delay(1000);
+    ESP.restart();
+  } else {
+    webServer.send(500, "application/json", "{\"error\":\"reset_failed\"}");
+  }
+}
 }

@@ -1,11 +1,13 @@
 /*
- * Prop Control Firmware - Enhanced with Video Playback and Dual-Core Processing
- * ESP32-based prop controller with video playback from SD card
+ * Enhanced Tricorder Firmware - With Persistent Configuration and Web Interface
+ * ESP32-based tricorder with video playback, LED control, and web configuration
  */
 
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
+#include <WebServer.h>
+#include <Preferences.h>
 #include <ArduinoJson.h>
 #include <FastLED.h>
 #include <TFT_eSPI.h>
@@ -16,12 +18,31 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
+#include "TricorderConfig.h"
 
 // Pin definitions for ESP32-2432S032C-I
 #define LED_PIN 21         // NeoPixel data pin (external connection) - IO21
 #define NUM_LEDS 3         // Number of NeoPixels in strip (3 front LEDs)
 #define TFT_BL 27          // TFT backlight pin
 #define LED_POWER_EN 22    // LED strip power enable pin (DC-DC converter)
+
+// LED Type Configuration - Change this to match your hardware
+// Uncomment ONE of the following lines:
+#define LED_TYPE_RGB       // 3-channel RGB LEDs (WS2812B, WS2811, etc.)
+// #define LED_TYPE_RGBW   // 4-channel RGBW LEDs (SK6812, WS2814, etc.)
+
+// LED Strip Configuration
+#ifdef LED_TYPE_RGB
+  #define CHANNELS_PER_LED 3  // RGB = 3 channels
+  #define LED_CHIPSET WS2812B
+  #define LED_COLOR_ORDER GRB
+#elif defined(LED_TYPE_RGBW)
+  #define CHANNELS_PER_LED 4  // RGBW = 4 channels  
+  #define LED_CHIPSET SK6812
+  #define LED_COLOR_ORDER GRBW
+#else
+  #error "Must define either LED_TYPE_RGB or LED_TYPE_RGBW"
+#endif
 
 // SD Card pins (typical SPI configuration for ESP32-2432S032C)
 #define SD_CS 5            // SD card chip select
@@ -40,25 +61,61 @@
 #define BATTERY_MAX_VOLTAGE 4.2      // Maximum battery voltage (for 100%)
 #define BATTERY_MIN_VOLTAGE 3.0      // Minimum battery voltage (for 0%)
 
+// Hardware reset pins and settings
+#define RESET_PIN 12          // Primary reset pin (short to ground during boot)
+#define RESET_PIN_2 13        // Secondary reset pin (alternative)
+#define BOOT_BUTTON_PIN 0     // Boot button for runtime reset (IO0)
+#define RESET_HOLD_TIME 3000  // Time to hold reset pin during boot (3 seconds)
+#define BOOT_HOLD_TIME 5000   // Time to hold boot button during runtime (5 seconds)
+#define RESET_BLINK_COUNT 6   // Number of LED blinks to indicate reset mode
+
 // Video playback settings
 #define FRAME_DELAY_MS 33  // ~30 FPS (1000ms / 30)
 #define VIDEO_BUFFER_SIZE 65536  // 64KB buffer - reduced from 128KB due to ESP32 memory constraints
 
-// Network configuration
-const char* WIFI_SSID = "Rigging Electric";
-const char* WIFI_PASSWORD = "academy123";
-const int UDP_PORT = 8888;
-const int SACN_PORT = 5568;
-const int SACN_UNIVERSE = 1;
+// Network settings
+#define UDP_PORT 5000      // Port for UDP status broadcasts
 
-// Device identification
-String deviceId = "TRICORDER_001";
-String firmwareVersion = "0.3";
+// Enhanced Configuration System
+TricorderConfig tricorderConfig;
+
+// Global configuration variables (loaded from tricorderConfig)
+String deviceId;
+String firmwareVersion = "Enhanced Tricorder v2.0";
+
+// Forward declaration of LED array (defined later)
+extern CRGB leds[NUM_LEDS];
+
+// Helper functions for LED color handling
+void setLEDColor(int index, int r, int g, int b, int w = 0) {
+  if (index < 0 || index >= NUM_LEDS) return;
+  
+  #ifdef LED_TYPE_RGB
+    // RGB mode: ignore white channel
+    leds[index] = CRGB(r, g, b);
+  #elif defined(LED_TYPE_RGBW)
+    // RGBW mode: FastLED handles RGBW with special syntax
+    leds[index] = CRGB(r, g, b);
+    // Note: For true RGBW support, you may need to use FastLED's raw buffer access
+    // This is a simplified version that works with most RGBW strips
+  #endif
+}
+
+void setAllLEDs(int r, int g, int b, int w = 0) {
+  #ifdef LED_TYPE_RGB
+    fill_solid(leds, NUM_LEDS, CRGB(r, g, b));
+  #elif defined(LED_TYPE_RGBW)
+    for (int i = 0; i < NUM_LEDS; i++) {
+      setLEDColor(i, r, g, b, w);
+    }
+  #endif
+}
 
 // Hardware objects
 CRGB leds[NUM_LEDS];
 TFT_eSPI tft = TFT_eSPI();
 WiFiUDP udp;
+WebServer webServer(80);
 JPEGDEC jpeg;
 
 // Dual-Core Task Handles
@@ -75,7 +132,7 @@ QueueHandle_t videoCommandQueue = NULL;
 struct LEDCommand {
   enum Type { SET_COLOR, SET_BRIGHTNESS, SET_INDIVIDUAL, SCANNER_EFFECT, PULSE_EFFECT };
   Type type;
-  int r, g, b;
+  int r, g, b, w;  // Added white channel for RGBW support
   int brightness;
   int ledIndex;
   int delayMs;
@@ -116,6 +173,11 @@ uint8_t ledBrightness = 128;
 unsigned long lastFrameTime = 0;
 int currentFrame = 0;
 int totalFrames = 1;
+
+// Boot button reset monitoring (runtime)
+bool bootButtonPressed = false;
+unsigned long bootButtonPressStart = 0;
+bool resetInProgress = false;
 String frameFiles[30]; // Store up to 30 frame files
 bool isAnimatedSequence = false;
 
@@ -132,7 +194,7 @@ int JPEGDraw(JPEGDRAW *pDraw) {
 
 // Function declarations
 void handleUDPCommands();
-void setLEDColor(int r, int g, int b);
+void setLEDColorCommand(int r, int g, int b, int w);
 void setLEDBrightness(int brightness);
 void setIndividualLED(int ledIndex, int r, int g, int b);
 void scannerEffect(int r, int g, int b, int delayMs = 100);
@@ -151,6 +213,8 @@ void showVideoFrame();
 bool displayStaticImage(String filename);
 bool displayBootImage(String filename);
 void displayInitializationScreen();
+void updateBootScreenWithStatus();
+void displaySystemStatus();
 
 // Battery monitoring functions
 float readBatteryVoltage();
@@ -158,15 +222,51 @@ int getBatteryPercentage();
 String getBatteryStatus();
 void initializeBatteryMonitoring();
 
+// Hardware reset functions
+bool checkHardwareReset();
+void performHardwareReset();
+void blinkResetIndicator();
+bool checkResetPinShorted();
+void checkBootButtonReset();
+
 // Dual-core task functions
 void ledTask(void *pvParameters);
 void networkTask(void *pvParameters);
 void videoTask(void *pvParameters);
 void processNetworkCommand(String jsonCommand);
 
+// Enhanced web server functions
+void setupWebServer();
+void handleRoot();
+void handleConfigPage();
+void handleGetConfig();
+void handleSetConfig();
+void handleGetStatus();
+void handleFactoryReset();
+void handleRestart();
+void handleGetVideos();
+void handleFileUpload();
+void handleNotFound();
+
 void setup() {
   Serial.begin(115200);
   Serial.println("Starting Prop Control System...");
+  
+  // Initialize reset pins first (avoid using GPIO0 which interferes with bootloader)
+  pinMode(RESET_PIN, INPUT_PULLUP);
+  pinMode(RESET_PIN_2, INPUT_PULLUP);
+  
+  // Initialize boot button for runtime reset monitoring (safe to use after boot)
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+  
+  // Check for hardware reset request BEFORE any other initialization
+  if (checkHardwareReset()) {
+    Serial.println("Hardware reset detected - performing factory reset");
+    performHardwareReset();
+    return; // Device will restart after reset
+  }
+  
+  // Rapid reboot reset removed to prevent boot loops
   
   // Allocate video buffer with fallback sizes
   Serial.printf("Free heap before buffer allocation: %d bytes\n", ESP.getFreeHeap());
@@ -211,7 +311,7 @@ void setup() {
   delay(100); // Allow power to stabilize
   
   // Initialize LEDs
-  FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+  FastLED.addLeds<LED_CHIPSET, LED_PIN, LED_COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(ledBrightness);
   
   // Initialize built-in RGB LED pins
@@ -268,6 +368,14 @@ void setup() {
   
   // Display initialization screen
   displayInitializationScreen();
+  
+  // Clear any existing boot count preferences to prevent boot loops
+  Preferences prefs;
+  if (prefs.begin("boot_count", false)) {
+    prefs.clear();
+    prefs.end();
+    Serial.println("Cleared boot count preferences");
+  }
   
   // Create dual-core tasks
   Serial.println("Creating dual-core tasks...");
@@ -329,10 +437,39 @@ void setup() {
   // Display initialization screen
   displayInitializationScreen();
   
-  // Initialize WiFi
+  // Initialize Enhanced Configuration System
+  Serial.println("Initializing configuration system...");
+  if (!tricorderConfig.begin()) {
+    Serial.println("Failed to initialize configuration - using defaults");
+    setBuiltinLED(255, 255, 0); // Yellow warning
+  } else {
+    Serial.println("Configuration system initialized successfully");
+    
+    // Initialize global variables from configuration
+    deviceId = String(tricorderConfig.getPropId());
+    
+    // Apply configuration settings
+    ledBrightness = tricorderConfig.getBrightness();
+    FastLED.setBrightness(ledBrightness);
+    
+    // Update display brightness
+    uint8_t displayBrightness = tricorderConfig.getDisplayBrightness();
+    ledcWrite(0, displayBrightness);
+    
+    Serial.printf("Loaded configuration: %s (%s)\n", 
+                  tricorderConfig.getDeviceLabel(), 
+                  tricorderConfig.getPropId());
+  }
+  
+  // Initialize WiFi using configuration
   Serial.println("Connecting to WiFi...");
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  
+  // Set hostname from configuration
+  WiFi.setHostname(tricorderConfig.getHostname());
+  
+  // Use WiFi credentials from configuration
+  WiFi.begin(tricorderConfig.getWiFiSSID(), tricorderConfig.getWiFiPassword());
   
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 40) { // 20 second timeout
@@ -346,22 +483,59 @@ void setup() {
     Serial.println("\nWiFi connected!");
     Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
     
-    // Initialize UDP
-    udp.begin(UDP_PORT);
-    Serial.printf("UDP server listening on port %d\n", UDP_PORT);
+    // Initialize UDP using configuration
+    uint16_t udpPort = tricorderConfig.getUdpPort();
+    udp.begin(udpPort);
+    Serial.printf("UDP server listening on port %d\n", udpPort);
+    
+    // Initialize Web Server
+    setupWebServer();
+    webServer.begin();
+    Serial.printf("Web server started on port %d\n", tricorderConfig.getWebPort());
     
     // Start mDNS
-    if (MDNS.begin(deviceId.c_str())) {
+    String hostname = tricorderConfig.getHostname();
+    if (MDNS.begin(hostname.c_str())) {
       Serial.println("mDNS responder started");
-      MDNS.addService("tricorder", "udp", UDP_PORT);
+      MDNS.addService("tricorder", "udp", udpPort);
+      MDNS.addService("http", "tcp", tricorderConfig.getWebPort());
     }
     
     // Set built-in LED to green when connected
     setBuiltinLED(0, 255, 0);
+    
+    // WiFi connection successful
   } else {
-    Serial.println("\nFailed to connect to WiFi");
-    // Set built-in LED to red when failed
-    setBuiltinLED(255, 0, 0);
+    Serial.println("\nFailed to connect to WiFi - Starting Access Point for configuration");
+    
+    // Start Access Point mode for configuration
+    WiFi.mode(WIFI_AP);
+    
+    // Create AP with device-specific name and default password
+    String apName = "Tricorder-" + String(deviceId);
+    const char* apPassword = "tricorder123"; // Default password for emergency access
+    
+    Serial.printf("Starting Access Point: %s\n", apName.c_str());
+    Serial.printf("Default password: %s\n", apPassword);
+    
+    if (WiFi.softAP(apName.c_str(), apPassword)) {
+      Serial.println("Access Point started successfully!");
+      Serial.printf("AP IP address: %s\n", WiFi.softAPIP().toString().c_str());
+      Serial.println("Connect to this AP to configure WiFi settings");
+      Serial.println("Default web interface: http://192.168.4.1");
+      
+      // Initialize Web Server even in AP mode
+      setupWebServer();
+      webServer.begin();
+      Serial.printf("Web server started on port %d (AP mode)\n", tricorderConfig.getWebPort());
+      
+      wifiConnected = false; // Mark as not connected to station
+    } else {
+      Serial.println("Failed to start Access Point!");
+    }
+    
+    // Set built-in LED to orange when in AP mode (red + green)
+    setBuiltinLED(255, 128, 0);
   }
   
   // Initialize SD Card
@@ -382,12 +556,23 @@ void setup() {
     Serial.println("SD card initialization failed!");
   }
   
+  // Update the boot screen with final status instead of separate screen
+  updateBootScreenWithStatus();
+  
   Serial.println("Setup complete!");
 }
 
 void loop() {
-  // Main loop now just handles system monitoring and WiFi status
+  // Main loop now handles web server and system monitoring
   // Most work is done by dedicated tasks on both cores
+  
+  // Check for boot button reset (runtime monitoring)
+  checkBootButtonReset();
+  
+  // Handle web server requests
+  if (wifiConnected) {
+    webServer.handleClient();
+  }
   
   // Check WiFi connection and notify network task if status changes
   static bool lastWifiStatus = false;
@@ -426,22 +611,90 @@ void loop() {
 
 // Initialization Screen Function
 void displayInitializationScreen() {
-  // Set text properties for LCARS-style display overlayed on boot image
-  tft.setTextColor(TFT_WHITE);
-  tft.setTextSize(1);  // Smaller text to fit in the center box
+  // Just display the boot image without any text overlay
+  // The text will be added later by updateBootScreenWithStatus()
+  // This prevents text overlap issues
+}
+
+void updateBootScreenWithStatus() {
+  // Update the boot screen with status info using the existing black center area
+  // Don't clear anything - just write text in the designated black space
   
-  // Position text in the center rectangular area (approximate coordinates)
+  // Set text properties for the LCARS center display area
+  tft.setTextSize(1);
   int textX = 50;      // Left margin for center box
-  int textY = 70;      // Top of center box area
-  int lineHeight = 12; // Line spacing for size 1 text
+  int textY = 70;      // Top of center box area  
+  int lineHeight = 14; // Line spacing
   int currentLine = 0;
   
+  // Header - Device info
+  tft.setTextColor(TFT_CYAN);
   tft.setCursor(textX, textY + (currentLine * lineHeight));
-  tft.println("PROP CONTROL SYSTEM");
+  tft.printf("%s", tricorderConfig.getDeviceLabel());
+  currentLine += 1;
+  
+  tft.setTextColor(TFT_WHITE);
+  tft.setCursor(textX, textY + (currentLine * lineHeight));
+  tft.printf("ID: %s", deviceId.c_str());
   currentLine += 2;
   
+  // Network status
+  if (WiFi.getMode() == WIFI_STA && wifiConnected) {
+    tft.setTextColor(TFT_GREEN);
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
+    tft.println("WiFi: CONNECTED");
+    currentLine += 1;
+    
+    tft.setTextColor(TFT_WHITE);
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
+    tft.printf("IP: %s", WiFi.localIP().toString().c_str());
+    currentLine += 1;
+    
+  } else if (WiFi.getMode() == WIFI_AP) {
+    tft.setTextColor(TFT_ORANGE);
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
+    tft.println("WiFi: ACCESS POINT");
+    currentLine += 1;
+    
+    tft.setTextColor(TFT_WHITE);
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
+    tft.printf("Tricorder-%s", deviceId.c_str());
+    currentLine += 1;
+    
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
+    tft.println("Pass: tricorder123");
+    currentLine += 1;
+    
+  } else {
+    tft.setTextColor(TFT_RED);
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
+    tft.println("WiFi: DISCONNECTED");
+    currentLine += 1;
+  }
+  
+  // SD Card status
+  currentLine += 1; 
+  if (sdCardInitialized) {
+    tft.setTextColor(TFT_GREEN);
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
+    tft.println("SD Card: OK");
+  } else {
+    tft.setTextColor(TFT_RED);
+    tft.setCursor(textX, textY + (currentLine * lineHeight));
+    tft.println("SD Card: FAILED");
+  }
+  currentLine += 2;
+  
+  // Reset instructions
+  tft.setTextColor(TFT_CYAN);
   tft.setCursor(textX, textY + (currentLine * lineHeight));
-  tft.println("Initializing Systems...");
+  tft.println("Reset: Hold BOOT 5s");
+  currentLine += 2;
+  
+  // Ready indicator
+  tft.setTextColor(TFT_GREEN);
+  tft.setCursor(textX, textY + (currentLine * lineHeight));
+  tft.println("SYSTEM READY");
 }
 
 // LED Task - Runs on Core 1 for real-time LED control
@@ -449,7 +702,7 @@ void ledTask(void *pvParameters) {
   Serial.printf("LED Task starting on Core: %d\n", xPortGetCoreID());
   
   // Re-initialize FastLED on this core to ensure proper multi-core operation
-  FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+  FastLED.addLeds<LED_CHIPSET, LED_PIN, LED_COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(ledBrightness);
   Serial.println("FastLED re-initialized on LED task core");
   
@@ -461,9 +714,9 @@ void ledTask(void *pvParameters) {
       Serial.printf("LED Task received command type: %d\n", command.type);
       switch (command.type) {
         case LEDCommand::SET_COLOR:
-          Serial.printf("Setting LED color to R:%d G:%d B:%d\n", command.r, command.g, command.b);
+          Serial.printf("Setting LED color to R:%d G:%d B:%d W:%d\n", command.r, command.g, command.b, command.w);
           currentColor = CRGB(command.r, command.g, command.b);
-          fill_solid(leds, NUM_LEDS, currentColor);
+          setAllLEDs(command.r, command.g, command.b, command.w);
           FastLED.show();
           Serial.println("LED color updated and displayed");
           break;
@@ -476,25 +729,24 @@ void ledTask(void *pvParameters) {
           
         case LEDCommand::SET_INDIVIDUAL:
           if (command.ledIndex >= 0 && command.ledIndex < NUM_LEDS) {
-            leds[command.ledIndex] = CRGB(command.r, command.g, command.b);
+            setLEDColor(command.ledIndex, command.r, command.g, command.b, command.w);
             FastLED.show();
           }
           break;
           
         case LEDCommand::SCANNER_EFFECT:
           {
-            CRGB color = CRGB(command.r, command.g, command.b);
             // Scan left to right
             for (int i = 0; i < NUM_LEDS; i++) {
-              fill_solid(leds, NUM_LEDS, CRGB::Black);
-              leds[i] = color;
+              setAllLEDs(0, 0, 0, 0);  // Clear all LEDs
+              setLEDColor(i, command.r, command.g, command.b, command.w);
               FastLED.show();
               delay(command.delayMs);
             }
             // Scan right to left
             for (int i = NUM_LEDS - 2; i >= 1; i--) {
-              fill_solid(leds, NUM_LEDS, CRGB::Black);
-              leds[i] = color;
+              setAllLEDs(0, 0, 0, 0);  // Clear all LEDs
+              setLEDColor(i, command.r, command.g, command.b, command.w);
               FastLED.show();
               delay(command.delayMs);
             }
@@ -531,39 +783,12 @@ void ledTask(void *pvParameters) {
 void networkTask(void *pvParameters) {
   Serial.printf("Network Task starting on Core: %d\n", xPortGetCoreID());
   
-  // Initialize WiFi in this task
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) { // 20 second timeout
-    delay(500);
-    Serial.print(".");
-    attempts++;
+  // WiFi is already initialized in setup(), just wait for connection
+  while (!wifiConnected) {
+    delay(100);
   }
   
-  if (WiFi.status() == WL_CONNECTED) {
-    wifiConnected = true;
-    Serial.println("\nWiFi connected!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-    
-    // Initialize UDP
-    udp.begin(UDP_PORT);
-    Serial.printf("UDP server listening on port %d\n", UDP_PORT);
-    
-    // Start mDNS
-    if (MDNS.begin(deviceId.c_str())) {
-      Serial.println("mDNS responder started");
-      MDNS.addService("tricorder", "udp", UDP_PORT);
-    }
-    
-    // Set built-in LED to white when connected
-    setBuiltinLED(255, 255, 255);
-  } else {
-    Serial.println("\nFailed to connect to WiFi");
-    setBuiltinLED(255, 0, 0);
-  }
+  Serial.println("Network task: WiFi connected, starting UDP handling");
   
   // Initialize SD Card
   if (SD.begin(SD_CS)) {
@@ -689,8 +914,9 @@ void processNetworkCommand(String jsonCommand) {
       ledCmd.r = doc["r"];
       ledCmd.g = doc["g"];
       ledCmd.b = doc["b"];
+      ledCmd.w = doc.containsKey("w") ? doc["w"] : 0;  // White channel optional for RGB compatibility
       
-      Serial.printf("Network task sending LED command R:%d G:%d B:%d\n", ledCmd.r, ledCmd.g, ledCmd.b);
+      Serial.printf("Network task sending LED command R:%d G:%d B:%d W:%d\n", ledCmd.r, ledCmd.g, ledCmd.b, ledCmd.w);
       BaseType_t result = xQueueSend(ledCommandQueue, &ledCmd, 0);
       if (result == pdPASS) {
         Serial.println("LED command successfully queued");
@@ -843,13 +1069,14 @@ void handleUDPCommands() {
   // Keep it for legacy compatibility but it does minimal work
 }
 
-void setLEDColor(int r, int g, int b) {
+void setLEDColorCommand(int r, int g, int b, int w = 0) {
   // Send command to LED task for thread-safe execution
   LEDCommand cmd;
   cmd.type = LEDCommand::SET_COLOR;
   cmd.r = r;
   cmd.g = g;
   cmd.b = b;
+  cmd.w = w;
   
   if (ledCommandQueue) {
     xQueueSend(ledCommandQueue, &cmd, 0);
@@ -961,6 +1188,8 @@ void sendPeriodicStatus() {
   // Send periodic status to server (broadcast to server IP)
   JsonDocument doc;
   doc["deviceId"] = deviceId;
+  doc["type"] = "tricorder";
+  doc["deviceLabel"] = tricorderConfig.getDeviceLabel();
   doc["firmwareVersion"] = firmwareVersion;
   doc["wifiConnected"] = wifiConnected;
   doc["ipAddress"] = WiFi.localIP().toString();
@@ -1966,7 +2195,7 @@ int getBatteryPercentage() {
 String getBatteryStatus() {
   int percentage = getBatteryPercentage();
   float voltage = readBatteryVoltage();
-  
+
   String status;
   if (percentage >= 75) {
     status = "High";
@@ -1979,7 +2208,586 @@ String getBatteryStatus() {
   } else {
     status = "Very Low";
   }
-  
+
   Serial.printf("Battery status: %s (%d%%, %.2fV)\n", status.c_str(), percentage, voltage);
   return status;
+}
+
+// ===== ENHANCED WEB SERVER FUNCTIONS =====
+
+void setupWebServer() {
+  // Main configuration page
+  webServer.on("/", HTTP_GET, handleRoot);
+  webServer.on("/config", HTTP_GET, handleConfigPage);
+  
+  // API endpoints
+  webServer.on("/api/config", HTTP_GET, handleGetConfig);
+  webServer.on("/api/config", HTTP_POST, handleSetConfig);
+  webServer.on("/api/status", HTTP_GET, handleGetStatus);
+  webServer.on("/api/factory-reset", HTTP_POST, handleFactoryReset);
+  webServer.on("/api/restart", HTTP_POST, handleRestart);
+  webServer.on("/api/videos", HTTP_GET, handleGetVideos);
+  
+  // File upload for videos (if needed)
+  webServer.on("/upload", HTTP_POST, []() {
+    webServer.send(200, "text/plain", "");
+  }, handleFileUpload);
+  
+  // 404 handler
+  webServer.onNotFound(handleNotFound);
+  
+  Serial.println("Web server routes configured");
+}
+
+void handleRoot() {
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<title>" + String(tricorderConfig.getDeviceLabel()) + "</title>";
+  html += "<style>body{font-family:Arial,sans-serif;margin:40px;background:#f0f0f0;}";
+  html += ".container{max-width:800px;margin:0 auto;background:white;padding:30px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.1);}";
+  html += "h1{color:#333;text-align:center;margin-bottom:30px;}";
+  html += ".status{background:#e7f3ff;padding:15px;border-radius:5px;margin:20px 0;}";
+  html += ".btn{display:inline-block;padding:10px 20px;margin:10px 5px;background:#007cba;color:white;text-decoration:none;border-radius:5px;}";
+  html += ".btn:hover{background:#005a87;}</style></head><body>";
+  
+  html += "<div class='container'>";
+  html += "<h1>🖥️ " + String(tricorderConfig.getDeviceLabel()) + "</h1>";
+  
+  html += "<div class='status'>";
+  html += "<h3>Device Status</h3>";
+  html += "<p><strong>Prop ID:</strong> " + String(tricorderConfig.getPropId()) + "</p>";
+  html += "<p><strong>Description:</strong> " + String(tricorderConfig.getDescription()) + "</p>";
+  html += "<p><strong>IP Address:</strong> " + WiFi.localIP().toString() + "</p>";
+  html += "<p><strong>Firmware:</strong> Enhanced Tricorder v2.0</p>";
+  html += "<p><strong>WiFi RSSI:</strong> " + String(WiFi.RSSI()) + " dBm</p>";
+  html += "<p><strong>Free Heap:</strong> " + String(ESP.getFreeHeap()) + " bytes</p>";
+  html += "<p><strong>Battery:</strong> " + getBatteryStatus() + "</p>";
+  html += "</div>";
+  
+  html += "<h3>Configuration</h3>";
+  html += "<a href='/config' class='btn'>📋 Device Configuration</a>";
+  html += "<a href='/api/config' class='btn'>📄 View JSON Config</a>";
+  html += "<a href='/api/status' class='btn'>📊 Status API</a>";
+  html += "<a href='/api/videos' class='btn'>🎬 Available Videos</a>";
+  
+  html += "<h3>Actions</h3>";
+  html += "<button class='btn' onclick='restart()'>🔄 Restart Device</button>";
+  html += "<button class='btn' onclick='factoryReset()' style='background:#dc3545;'>⚠️ Factory Reset</button>";
+  
+  html += "<h3>Emergency Reset</h3>";
+  html += "<div style='background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:10px 0;'>";
+  html += "<strong>⚠️ If device becomes unresponsive:</strong><br>";
+  html += "1. <strong>Runtime Reset:</strong> Hold <strong>BOOT button for 5 seconds</strong> while device is running<br>";
+  html += "2. <strong>Boot Reset:</strong> Short <strong>GPIO12 to Ground</strong> during startup<br>";
+  html += "3. <strong>Alternative:</strong> Short <strong>GPIO13 to Ground</strong> during startup<br>";
+  html += "4. Device will create an access point: <strong>Tricorder-" + deviceId + "</strong><br>";
+  html += "5. Password: <strong>tricorder123</strong><br>";
+  html += "6. Connect and visit <strong>http://192.168.4.1</strong>";
+  html += "</div>";
+  
+  html += "</div>";
+  
+  html += "<script>";
+  html += "function restart() { if(confirm('Restart device?')) fetch('/api/restart', {method:'POST'}); }";
+  html += "function factoryReset() { if(confirm('Factory reset? This will erase all settings!')) fetch('/api/factory-reset', {method:'POST'}); }";
+  html += "</script>";
+  
+  html += "</body></html>";
+  
+  webServer.send(200, "text/html", html);
+}
+
+void handleConfigPage() {
+  String html = "<!DOCTYPE html><html><head>";
+  html += "<title>Configuration - " + String(tricorderConfig.getDeviceLabel()) + "</title>";
+  html += "<style>body{font-family:Arial,sans-serif;margin:40px;background:#f0f0f0;}";
+  html += ".container{max-width:600px;margin:0 auto;background:white;padding:30px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.1);}";
+  html += "h1{color:#333;text-align:center;margin-bottom:30px;}";
+  html += ".form-group{margin:20px 0;} label{display:block;margin-bottom:5px;font-weight:bold;}";
+  html += "input,select,textarea{width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}";
+  html += "button{padding:10px 20px;margin:10px 5px;border:none;border-radius:5px;cursor:pointer;}";
+  html += ".btn-primary{background:#007cba;color:white;} .btn-secondary{background:#6c757d;color:white;}";
+  html += ".section{border:1px solid #ddd;padding:20px;margin:20px 0;border-radius:5px;background:#f9f9f9;}";
+  html += "</style></head><body>";
+  
+  html += "<div class='container'>";
+  html += "<h1>⚙️ Device Configuration</h1>";
+  
+  html += "<form id='configForm'>";
+  
+  // Device Settings
+  html += "<div class='section'>";
+  html += "<h3>Device Settings</h3>";
+  html += "<div class='form-group'>";
+  html += "<label for='deviceLabel'>Device Label:</label>";
+  html += "<input type='text' id='deviceLabel' name='deviceLabel' value='" + String(tricorderConfig.getDeviceLabel()) + "' required>";
+  html += "</div>";
+  html += "<div class='form-group'>";
+  html += "<label for='propId'>Prop ID:</label>";
+  html += "<input type='text' id='propId' name='propId' value='" + String(tricorderConfig.getPropId()) + "' required>";
+  html += "</div>";
+  html += "<div class='form-group'>";
+  html += "<label for='description'>Description:</label>";
+  html += "<textarea id='description' name='description' rows='2'>" + String(tricorderConfig.getDescription()) + "</textarea>";
+  html += "</div>";
+  html += "</div>";
+  
+  // LED Settings
+  html += "<div class='section'>";
+  html += "<h3>LED Settings</h3>";
+  html += "<div class='form-group'>";
+  html += "<label for='brightness'>Brightness (0-255):</label>";
+  html += "<input type='number' id='brightness' name='brightness' min='0' max='255' value='" + String(tricorderConfig.getBrightness()) + "'>";
+  html += "</div>";
+  html += "</div>";
+  
+  // SACN Settings
+  html += "<div class='section'>";
+  html += "<h3>SACN/DMX Settings</h3>";
+  html += "<div class='form-group'>";
+  html += "<label for='sacnEnabled'>SACN Enabled:</label>";
+  html += "<input type='checkbox' id='sacnEnabled' name='sacnEnabled' " + String(tricorderConfig.getSacnEnabled() ? "checked" : "") + ">";
+  html += "</div>";
+  html += "<div class='form-group'>";
+  html += "<label for='sacnUniverse'>SACN Universe (1-63999):</label>";
+  html += "<input type='number' id='sacnUniverse' name='sacnUniverse' min='1' max='63999' value='" + String(tricorderConfig.getSacnUniverse()) + "'>";
+  html += "</div>";
+  html += "<div class='form-group'>";
+  html += "<label for='dmxAddress'>DMX Address (1-512):</label>";
+  html += "<input type='number' id='dmxAddress' name='dmxAddress' min='1' max='512' value='" + String(tricorderConfig.getDmxAddress()) + "'>";
+  html += "</div>";
+  html += "</div>";
+  
+  // Network Settings
+  html += "<div class='section'>";
+  html += "<h3>Network Settings</h3>";
+  html += "<div class='form-group'>";
+  html += "<label for='wifiSSID'>WiFi SSID:</label>";
+  html += "<input type='text' id='wifiSSID' name='wifiSSID' value='" + String(tricorderConfig.getWiFiSSID()) + "' required>";
+  html += "</div>";
+  html += "<div class='form-group'>";
+  html += "<label for='wifiPassword'>WiFi Password:</label>";
+  html += "<input type='password' id='wifiPassword' name='wifiPassword' value='" + String(tricorderConfig.getWiFiPassword()) + "'>";
+  html += "</div>";
+  html += "<div class='form-group'>";
+  html += "<label for='hostname'>Hostname:</label>";
+  html += "<input type='text' id='hostname' name='hostname' value='" + String(tricorderConfig.getHostname()) + "' required>";
+  html += "</div>";
+  html += "</div>";
+  
+  html += "<div style='text-align:center;'>";
+  html += "<button type='submit' class='btn-primary'>💾 Save Configuration</button>";
+  html += "<button type='button' class='btn-secondary' onclick='window.location.href=\"/\"'>🔙 Back</button>";
+  html += "</div>";
+  
+  html += "</form>";
+  html += "</div>";
+  
+  html += "<script>";
+  html += "document.getElementById('configForm').addEventListener('submit', function(e) {";
+  html += "  e.preventDefault();";
+  html += "  const formData = new FormData(e.target);";
+  html += "  const config = {};";
+  html += "  for (let [key, value] of formData.entries()) {";
+  html += "    if (key === 'sacnEnabled') config[key] = true;";
+  html += "    else if (key === 'brightness' || key === 'sacnUniverse' || key === 'dmxAddress') config[key] = parseInt(value);";
+  html += "    else config[key] = value;";
+  html += "  }";
+  html += "  if (!formData.has('sacnEnabled')) config.sacnEnabled = false;";
+  html += "  fetch('/api/config', {";
+  html += "    method: 'POST',";
+  html += "    headers: {'Content-Type': 'application/json'},";
+  html += "    body: JSON.stringify(config)";
+  html += "  }).then(response => response.json()).then(data => {";
+  html += "    alert('Configuration saved successfully!');";
+  html += "    window.location.href = '/';";
+  html += "  }).catch(error => {";
+  html += "    alert('Error saving configuration: ' + error);";
+  html += "  });";
+  html += "});";
+  html += "</script>";
+  
+  html += "</body></html>";
+  
+  webServer.send(200, "text/html", html);
+}
+
+void handleGetConfig() {
+  String json = tricorderConfig.toJson();
+  webServer.send(200, "application/json", json);
+}
+
+void handleSetConfig() {
+  if (!webServer.hasArg("plain")) {
+    webServer.send(400, "application/json", "{\"error\":\"No JSON data received\"}");
+    return;
+  }
+  
+  String body = webServer.arg("plain");
+  Serial.println("Received config update: " + body);
+  
+  if (tricorderConfig.fromJson(body)) {
+    if (tricorderConfig.save()) {
+      webServer.send(200, "application/json", "{\"status\":\"Configuration saved successfully\"}");
+      Serial.println("Configuration updated and saved");
+      
+      // Apply new settings immediately where possible
+      ledBrightness = tricorderConfig.getBrightness();
+      FastLED.setBrightness(ledBrightness);
+      
+    } else {
+      webServer.send(500, "application/json", "{\"error\":\"Failed to save configuration\"}");
+    }
+  } else {
+    webServer.send(400, "application/json", "{\"error\":\"Invalid JSON configuration\"}");
+  }
+}
+
+void handleGetStatus() {
+  DynamicJsonDocument doc(1024);
+  
+  doc["deviceLabel"] = tricorderConfig.getDeviceLabel();
+  doc["propId"] = tricorderConfig.getPropId();
+  doc["firmwareVersion"] = "Enhanced Tricorder v2.0";
+  doc["ipAddress"] = WiFi.localIP().toString();
+  doc["macAddress"] = WiFi.macAddress();
+  doc["wifiRSSI"] = WiFi.RSSI();
+  doc["freeHeap"] = ESP.getFreeHeap();
+  doc["uptime"] = millis();
+  doc["wifiConnected"] = wifiConnected;
+  doc["sdCardInitialized"] = sdCardInitialized;
+  doc["currentVideo"] = currentVideo;
+  doc["videoPlaying"] = videoPlaying;
+  doc["batteryVoltage"] = readBatteryVoltage();
+  doc["batteryPercentage"] = getBatteryPercentage();
+  doc["batteryStatus"] = getBatteryStatus();
+  doc["ledBrightness"] = ledBrightness;
+  doc["displayBrightness"] = tricorderConfig.getDisplayBrightness();
+  
+  String response;
+  serializeJson(doc, response);
+  webServer.send(200, "application/json", response);
+}
+
+void handleFactoryReset() {
+  Serial.println("Factory reset requested via web interface");
+  
+  if (tricorderConfig.factoryReset()) {
+    webServer.send(200, "application/json", "{\"status\":\"Factory reset completed - device will restart\"}");
+    delay(1000);
+    ESP.restart();
+  } else {
+    webServer.send(500, "application/json", "{\"error\":\"Factory reset failed\"}");
+  }
+}
+
+void handleRestart() {
+  webServer.send(200, "application/json", "{\"status\":\"Device restarting...\"}");
+  delay(1000);
+  ESP.restart();
+}
+
+void handleGetVideos() {
+  String videoList = getVideoList();
+  webServer.send(200, "application/json", videoList);
+}
+
+void handleFileUpload() {
+  // This would handle video file uploads if needed
+  // For now, just acknowledge
+  webServer.send(200, "text/plain", "File upload not implemented yet");
+}
+
+void handleNotFound() {
+  String message = "File Not Found\n\n";
+  message += "URI: " + webServer.uri() + "\n";
+  message += "Method: ";
+  message += (webServer.method() == HTTP_GET ? "GET" : "POST");
+  message += "\n";
+  message += "Arguments: " + String(webServer.args()) + "\n";
+  
+  for (uint8_t i = 0; i < webServer.args(); i++) {
+    message += " " + webServer.argName(i) + ": " + webServer.arg(i) + "\n";
+  }
+  
+  webServer.send(404, "text/plain", message);
+}
+
+void displaySystemStatus() {
+  // Clear the screen and show current system status
+  tft.fillScreen(TFT_BLACK);
+  
+  // Header
+  tft.setTextColor(TFT_CYAN);
+  tft.setTextSize(2);
+  tft.setCursor(10, 10);
+  tft.println("TRICORDER STATUS");
+  
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_WHITE);
+  int y = 40;
+  int lineHeight = 16;
+  
+  // Device info
+  tft.setCursor(10, y);
+  tft.printf("Device: %s", tricorderConfig.getDeviceLabel());
+  y += lineHeight;
+  
+  tft.setCursor(10, y);
+  tft.printf("ID: %s", deviceId.c_str());
+  y += lineHeight;
+  
+  // Network status
+  y += 5; // Extra space
+  if (WiFi.getMode() == WIFI_STA && wifiConnected) {
+    tft.setTextColor(TFT_GREEN);
+    tft.setCursor(10, y);
+    tft.println("WiFi: CONNECTED");
+    y += lineHeight;
+    
+    tft.setTextColor(TFT_WHITE);
+    tft.setCursor(10, y);
+    tft.printf("IP: %s", WiFi.localIP().toString().c_str());
+    y += lineHeight;
+    
+    tft.setCursor(10, y);
+    tft.printf("Web: http://%s", WiFi.localIP().toString().c_str());
+    y += lineHeight;
+    
+  } else if (WiFi.getMode() == WIFI_AP) {
+    tft.setTextColor(TFT_ORANGE);
+    tft.setCursor(10, y);
+    tft.println("WiFi: ACCESS POINT");
+    y += lineHeight;
+    
+    tft.setTextColor(TFT_WHITE);
+    tft.setCursor(10, y);
+    tft.printf("AP: Tricorder-%s", deviceId.c_str());
+    y += lineHeight;
+    
+    tft.setCursor(10, y);
+    tft.printf("IP: %s", WiFi.softAPIP().toString().c_str());
+    y += lineHeight;
+    
+    tft.setCursor(10, y);
+    tft.println("Password: tricorder123");
+    y += lineHeight;
+    
+  } else {
+    tft.setTextColor(TFT_RED);
+    tft.setCursor(10, y);
+    tft.println("WiFi: DISCONNECTED");
+    y += lineHeight;
+  }
+  
+  // SD Card status
+  y += 5; // Extra space
+  if (sdCardInitialized) {
+    tft.setTextColor(TFT_GREEN);
+    tft.setCursor(10, y);
+    tft.println("SD Card: OK");
+  } else {
+    tft.setTextColor(TFT_RED);
+    tft.setCursor(10, y);
+    tft.println("SD Card: FAILED");
+  }
+  y += lineHeight;
+  
+  // Battery status
+  y += 5; // Extra space
+  float batteryVoltage = readBatteryVoltage();
+  int batteryPercent = getBatteryPercentage();
+  
+  if (batteryPercent > 50) {
+    tft.setTextColor(TFT_GREEN);
+  } else if (batteryPercent > 20) {
+    tft.setTextColor(TFT_YELLOW);
+  } else {
+    tft.setTextColor(TFT_RED);
+  }
+  
+  tft.setCursor(10, y);
+  tft.printf("Battery: %d%% (%.2fV)", batteryPercent, batteryVoltage);
+  y += lineHeight;
+  
+  // Reset instructions
+  y += 10; // Extra space
+  tft.setTextColor(TFT_CYAN);
+  tft.setCursor(10, y);
+  tft.println("FACTORY RESET:");
+  y += lineHeight;
+  
+  tft.setTextColor(TFT_WHITE);
+  tft.setCursor(10, y);
+  tft.println("Hold BOOT btn 5s (runtime)");
+  y += lineHeight;
+  
+  tft.setCursor(10, y);
+  tft.println("Short GPIO12 to GND (boot)");
+  y += lineHeight;
+}
+
+// Hardware Reset Functions
+bool checkHardwareReset() {
+  Serial.println("Checking for hardware reset conditions...");
+  
+  // Method 1: Check if reset pin (GPIO12) is shorted to ground
+  if (checkResetPinShorted()) {
+    Serial.println("Reset pin shorted - hardware reset triggered");
+    return true;
+  }
+  
+  // Method 2: Check if secondary reset pin (GPIO13) is shorted to ground
+  pinMode(RESET_PIN_2, INPUT_PULLUP);
+  delay(10);
+  if (digitalRead(RESET_PIN_2) == LOW) {
+    Serial.println("Secondary reset pin shorted - hardware reset triggered");
+    return true;
+  }
+  
+  Serial.println("No hardware reset conditions detected");
+  return false;
+}
+
+// Rapid reboot detection functions removed to prevent boot loops
+
+bool checkResetPinShorted() {
+  // Check if reset pin (GPIO12) is shorted to ground
+  Serial.println("Checking reset pin...");
+  
+  // Read pin state multiple times to ensure it's consistently LOW
+  int lowCount = 0;
+  for (int i = 0; i < 5; i++) {
+    if (digitalRead(RESET_PIN) == LOW) {
+      lowCount++;
+    }
+    delay(10);
+  }
+  
+  bool pinShorted = (lowCount >= 4); // At least 4/5 reads must be LOW
+  Serial.printf("Reset pin check: %d/5 reads were LOW, shorted=%s\n", lowCount, pinShorted ? "true" : "false");
+  
+  return pinShorted;
+}
+
+void performHardwareReset() {
+  Serial.println("=== PERFORMING HARDWARE FACTORY RESET ===");
+  
+  // Initialize built-in RGB LED for feedback
+  pinMode(RGB_LED_R, OUTPUT);
+  pinMode(RGB_LED_G, OUTPUT);
+  pinMode(RGB_LED_B, OUTPUT);
+  
+  // Show visual feedback that reset is happening
+  blinkResetIndicator();
+  
+  // Initialize preferences and perform factory reset
+  Preferences prefs;
+  if (prefs.begin("tricorder", false)) {
+    Serial.println("Clearing all stored preferences...");
+    bool cleared = prefs.clear();
+    prefs.end();
+    
+    if (cleared) {
+      Serial.println("✓ Factory reset completed successfully");
+      
+      // Show success indication (green LED)
+      digitalWrite(RGB_LED_R, LOW);
+      digitalWrite(RGB_LED_G, HIGH);
+      digitalWrite(RGB_LED_B, LOW);
+      delay(2000);
+      
+    } else {
+      Serial.println("✗ Factory reset failed");
+      
+      // Show error indication (red LED)
+      digitalWrite(RGB_LED_R, HIGH);
+      digitalWrite(RGB_LED_G, LOW);
+      digitalWrite(RGB_LED_B, LOW);
+      delay(2000);
+    }
+  } else {
+    Serial.println("✗ Failed to initialize preferences for reset");
+  }
+  
+  // Turn off LEDs
+  digitalWrite(RGB_LED_R, LOW);
+  digitalWrite(RGB_LED_G, LOW);
+  digitalWrite(RGB_LED_B, LOW);
+  
+  Serial.println("Restarting device with factory defaults...");
+  delay(1000);
+  ESP.restart();
+}
+
+void blinkResetIndicator() {
+  Serial.println("Showing hardware reset indicator (blinking LED)...");
+  
+  // Blink RGB LED rapidly to indicate reset is happening
+  for (int i = 0; i < RESET_BLINK_COUNT; i++) {
+    // Yellow blink (red + green)
+    digitalWrite(RGB_LED_R, HIGH);
+    digitalWrite(RGB_LED_G, HIGH);
+    digitalWrite(RGB_LED_B, LOW);
+    delay(200);
+    
+    // Off
+    digitalWrite(RGB_LED_R, LOW);
+    digitalWrite(RGB_LED_G, LOW);
+    digitalWrite(RGB_LED_B, LOW);
+    delay(200);
+  }
+}
+
+void checkBootButtonReset() {
+  // Monitor boot button for 5-second hold to trigger factory reset
+  bool buttonCurrentlyPressed = (digitalRead(BOOT_BUTTON_PIN) == LOW);
+  
+  if (buttonCurrentlyPressed && !bootButtonPressed) {
+    // Button just pressed
+    bootButtonPressed = true;
+    bootButtonPressStart = millis();
+    Serial.println("Boot button pressed - monitoring for reset");
+    
+  } else if (!buttonCurrentlyPressed && bootButtonPressed) {
+    // Button just released
+    bootButtonPressed = false;
+    unsigned long holdTime = millis() - bootButtonPressStart;
+    Serial.printf("Boot button released after %lu ms\n", holdTime);
+    
+    if (resetInProgress) {
+      Serial.println("Reset cancelled - button released");
+      resetInProgress = false;
+      // Turn off any reset indication LEDs
+      setBuiltinLED(0, 0, 0);
+    }
+    
+  } else if (buttonCurrentlyPressed && bootButtonPressed && !resetInProgress) {
+    // Button being held - check duration
+    unsigned long holdTime = millis() - bootButtonPressStart;
+    
+    if (holdTime >= BOOT_HOLD_TIME) {
+      // 5 seconds reached - trigger reset
+      Serial.println("Boot button held for 5 seconds - triggering factory reset!");
+      resetInProgress = true;
+      
+      // Visual feedback - flash LED to indicate reset starting
+      setBuiltinLED(255, 255, 0); // Yellow to indicate reset
+      delay(100);
+      setBuiltinLED(0, 0, 0);
+      delay(100);
+      setBuiltinLED(255, 255, 0);
+      delay(100);
+      setBuiltinLED(0, 0, 0);
+      
+      // Perform factory reset
+      performHardwareReset();
+    } else if (holdTime >= (BOOT_HOLD_TIME - 1000)) {
+      // 1 second warning before reset
+      if ((holdTime % 200) < 100) {
+        setBuiltinLED(255, 255, 0); // Yellow warning flash
+      } else {
+        setBuiltinLED(0, 0, 0);
+      }
+    }
+  }
 }

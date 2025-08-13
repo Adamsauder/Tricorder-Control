@@ -11,6 +11,7 @@ import time
 import uuid
 import threading
 import ipaddress
+import requests
 from datetime import datetime
 from typing import Dict, List, Optional
 from flask import Flask, render_template, request, jsonify, send_file, abort
@@ -184,18 +185,23 @@ class TricorderServer:
             # Handle both 'deviceId' (from ESP32) and 'device_id' formats
             device_id = data.get('deviceId') or data.get('device_id', f'UNKNOWN_{addr[0]}')
             
-            # Process messages from ESP32 devices (TRICORDER_ and POLYINOCULATOR_)
-            if not (device_id.startswith('TRICORDER_') or device_id.startswith('POLYINOCULATOR_')):
+            # Process messages from ESP32 devices
+            # Accept legacy format (TRICORDER_, POLYINOCULATOR_) and new format (TRIC, POLY)
+            is_tricorder = (device_id.startswith('TRICORDER_') or device_id.startswith('TRIC'))
+            is_polyinoculator = (device_id.startswith('POLYINOCULATOR_') or device_id.startswith('POLY'))
+            
+            if not (is_tricorder or is_polyinoculator):
                 print(f"🚫 Ignoring unsupported device: {device_id} from {addr[0]}")
                 return
             
             # Determine device type
-            device_type = 'tricorder' if device_id.startswith('TRICORDER_') else 'polyinoculator'
+            device_type = 'tricorder' if is_tricorder else 'polyinoculator'
             
             # Update device registry with comprehensive info
             devices[device_id] = {
                 'device_id': device_id,
                 'device_type': device_type,
+                'device_label': data.get('deviceLabel', device_id),  # Use deviceLabel if available, fallback to device_id
                 'ip_address': addr[0],
                 'port': addr[1],
                 'last_seen': datetime.now().isoformat(),
@@ -263,7 +269,16 @@ server = TricorderServer()
 
 @app.route('/')
 def index():
-    """Main web interface"""
+    """Main web interface - serve enhanced dashboard"""
+    try:
+        with open('web/enhanced-prop-dashboard.html', 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        # Fallback to basic interface if enhanced dashboard not found
+        return basic_interface()
+
+def basic_interface():
+    """Fallback basic interface"""
     return '''
     <!DOCTYPE html>
     <html>
@@ -271,630 +286,15 @@ def index():
         <title>Prop Control System</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-            .container { max-width: 1200px; margin: 0 auto; }
-            .status { background: white; padding: 20px; margin: 10px 0; border-radius: 8px; }
-            .devices { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-            .device { background: white; padding: 15px; border-radius: 8px; border-left: 4px solid #4CAF50; }
-            .device.offline { border-left-color: #f44336; }
-            button { background: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin: 2px; }
-            button:hover { background: #1976D2; }
-            .simulator { text-align: center; margin: 20px 0; }
+            .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
         </style>
     </head>
     <body>
         <div class="container">
             <h1>🔺 Prop Control System</h1>
-            
-            <div class="status">
-                <h2>Server Status</h2>
-                <p>🖥️ Server IP: <span id="server-ip">''' + get_server_ip() + '''</span></p>
-                <p>✅ UDP Server running on port ''' + str(CONFIG['udp_port']) + '''</p>
-                <p>✅ Web Server running on port ''' + str(CONFIG['web_port']) + '''</p>
-                <p>📱 Connected Devices: <span id="device-count">0</span></p>
-                <button onclick="refreshServerInfo()" style="background: #2196F3; margin-top: 10px;">🔄 Refresh Server Info</button>
-            </div>
-
-
-            
-            <div class="status">
-                <h2>📡 sACN Data Viewer</h2>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
-                    <div>
-                        <label for="sacnInterface"><strong>Network Interface:</strong></label>
-                        <select id="sacnInterface" style="width: 100%; padding: 8px; margin-top: 5px;" onchange="updateSACNInterface()">
-                            <option value="">Select Network Interface...</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="sacnUniverse"><strong>sACN Universe:</strong></label>
-                        <input type="number" id="sacnUniverse" min="1" max="63999" value="1" style="width: 100%; padding: 8px; margin-top: 5px;" onchange="updateSACNUniverse()">
-                    </div>
-                </div>
-                <div style="margin-bottom: 15px;">
-                    <span id="sacnStatus" style="padding: 5px 10px; border-radius: 15px; background: #ff4444; color: white; font-size: 0.9em;">sACN Disconnected</span>
-                    <button onclick="toggleSACN()" id="sacnToggle" style="background: #4CAF50; margin-left: 10px;">Enable sACN</button>
-                    <button onclick="refreshSACNData()" style="background: #2196F3; margin-left: 10px;">Refresh Data</button>
-                </div>
-                <div id="sacnDataTable" style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px;">
-                    <p style="text-align: center; color: #666; padding: 20px;">Enable sACN and select a universe to view DMX data</p>
-                </div>
-            </div>
-            
-            <div class="status">
-                <h2>Connected Devices</h2>
-                <div style="margin-bottom: 15px;">
-                    <button onclick="startDiscovery()" style="background: #4CAF50;">🔍 Search for Devices</button>
-                    <input type="text" id="deviceIP" placeholder="192.168.1.xxx" style="padding: 8px; margin: 0 10px; border: 1px solid #ccc; border-radius: 4px;">
-                    <button onclick="addDevice()" style="background: #FF9800;">➕ Add Device Manually</button>
-                </div>
-                <div id="devices" class="devices">
-                    <p>No devices connected. Use the buttons above to discover or add devices.</p>
-                </div>
-            </div>
+            <p>Enhanced dashboard not found. Please check that web/enhanced-prop-dashboard.html exists.</p>
+            <p>Server is running on port ''' + str(CONFIG['web_port']) + '''</p>
         </div>
-
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
-        <script>
-            const socket = io();
-            const devicesDiv = document.getElementById('devices');
-            const deviceCount = document.getElementById('device-count');
-            
-            socket.on('device_update', function(device) {
-                updateDeviceDisplay();
-            });
-            
-            // Store devices data globally so updateDeviceDisplay can access it
-            window.devicesData = {};
-            
-            socket.on('device_update', function(device) {
-                window.devicesData[device.device_id] = device;
-                updateDeviceDisplay();
-            });
-            
-            function updateDeviceDisplay() {
-                const deviceList = Object.values(window.devicesData || {});
-                deviceCount.textContent = deviceList.length;
-                
-                if (deviceList.length === 0) {
-                    devicesDiv.innerHTML = '<p>No devices connected.</p>';
-                    return;
-                }
-                
-                devicesDiv.innerHTML = deviceList.map(device => `
-                    <div class="device ${device.status}">
-                        <h3>${device.device_id}</h3>
-                        <p><strong>IP:</strong> ${device.ip_address}</p>
-                        <p><strong>Status:</strong> ${device.status}</p>
-                        <p><strong>Last seen:</strong> ${new Date(device.last_seen).toLocaleString()}</p>
-                        ${device.firmware_version ? `<p><strong>Firmware:</strong> ${device.firmware_version}</p>` : ''}
-                        ${device.free_heap ? `<p><strong>Free Heap:</strong> ${device.free_heap} bytes</p>` : ''}
-                        ${device.video_playing ? `<p><strong>Video:</strong> ${device.current_video || 'Playing'} ${device.video_looping ? '(Looping)' : ''}</p>` : ''}
-                        
-                        <div style="margin: 10px 0;">
-                            <strong>🔋 Battery:</strong>
-                            <div style="background: #333; border-radius: 5px; overflow: hidden; height: 20px; position: relative; margin: 5px 0;">
-                                <div style="width: ${device.batteryPercentage || 0}%; height: 100%; background: ${getBatteryColor(device.batteryPercentage || 0)}; transition: width 0.3s;"></div>
-                                <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">
-                                    ${device.batteryPercentage || 0}% (${device.batteryVoltage ? device.batteryVoltage.toFixed(2) + 'V' : 'N/A'})
-                                </div>
-                            </div>
-                            <div style="font-size: 12px; color: #888;">Status: ${device.batteryStatus || 'Unknown'}</div>
-                            <button onclick="requestBatteryUpdate('${device.device_id}')" style="font-size: 12px; padding: 2px 6px; margin-top: 5px;">🔄 Update Battery</button>
-                        </div>
-                        
-                        <p><strong>🎭 sACN:</strong> <span style="color: #4CAF50;">RGB Channels 1,2,3 (Built-in LED + LED Strip)</span></p>
-                        <div style="margin-top: 10px;">
-                            <strong>📺 Image Controls:</strong><br>
-                            <button onclick="sendBootScreen('${device.device_id}')">Play Startup</button>
-                            <button onclick="sendImageCommand('${device.device_id}', 'greenscreen.jpg')" style="background: #00ff00; color: black; margin: 2px;">🟩 Green Screen</button>
-                            <button onclick="sendImageCommand('${device.device_id}', 'test.jpg')" style="background: #ffcc00; color: black; margin: 2px;">📺 Test Card</button>
-                            <button onclick="sendImageCommand('${device.device_id}', 'test2.jpg')" style="background: #ff6600; color: white; margin: 2px;">� Test2</button>
-                            <button onclick="sendImageCommand('${device.device_id}', 'color_red.jpg')" style="background: #ff0000; color: white; margin: 2px;">� Red Screen</button>
-                            <button onclick="sendImageCommand('${device.device_id}', 'color_white.jpg')" style="background: #ffffff; color: black; margin: 2px;">⚪ White Screen</button>
-                            <br><br>
-                            <strong>💡 LED Controls:</strong><br>
-                            <button onclick="sendLEDColor('${device.device_id}', 255, 0, 0)" style="background: #ff4444; margin: 2px;">🔴 Red</button>
-                            <button onclick="sendLEDColor('${device.device_id}', 0, 255, 0)" style="background: #44ff44; margin: 2px;">🟢 Green</button>
-                            <button onclick="sendLEDColor('${device.device_id}', 0, 0, 255)" style="background: #4444ff; margin: 2px;">🔵 Blue</button>
-                            <button onclick="sendLEDColor('${device.device_id}', 255, 255, 0)" style="background: #ffff44; color: black; margin: 2px;">🟡 Yellow</button>
-                            <button onclick="sendLEDColor('${device.device_id}', 255, 0, 255)" style="background: #ff44ff; margin: 2px;">🟣 Magenta</button>
-                            <button onclick="sendLEDColor('${device.device_id}', 0, 255, 255)" style="background: #44ffff; color: black; margin: 2px;">🔵 Cyan</button>
-                            <button onclick="sendLEDColor('${device.device_id}', 255, 255, 255)" style="background: #ffffff; color: black; margin: 2px;">⚪ White</button>
-                            <button onclick="sendLEDColor('${device.device_id}', 0, 0, 0)" style="background: #666666; margin: 2px;">⚫ Off</button>
-                            <br>
-                            <button onclick="sendDiagnostic('${device.device_id}')" style="background: #ff9900; margin: 2px;">🔧 LED Diagnostic</button>
-                            <br><br>
-                            <button onclick="sendCommand('${device.device_id}', 'stop_video', '')">Stop Video</button>
-                        </div>
-                    </div>
-                `).join('');
-            }
-            
-            function sendCommand(deviceId, action, data) {
-                fetch('/api/command', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        device_id: deviceId,
-                        action: action,
-                        data: data
-                    })
-                });
-            }
-            
-            function sendImageCommand(deviceId, filename) {
-                fetch('/api/command', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        device_id: deviceId,
-                        action: 'display_image',
-                        parameters: {
-                            filename: filename
-                        }
-                    })
-                });
-            }
-            
-            function sendBootScreen(deviceId) {
-                fetch('/api/command', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        device_id: deviceId,
-                        action: 'display_boot_screen',
-                        parameters: {}
-                    })
-                });
-            }
-            
-            function sendLEDColor(deviceId, r, g, b) {
-                // Simple debouncing to prevent rapid clicks
-                const now = Date.now();
-                if (window.lastLEDCommand && (now - window.lastLEDCommand) < 200) {
-                    console.log('⏳ LED command ignored (too fast)');
-                    return;
-                }
-                window.lastLEDCommand = now;
-                
-                console.log(`Setting LED color for ${deviceId} to RGB(${r}, ${g}, ${b})`);
-                
-                // Send built-in LED command
-                fetch('/api/command', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        device_id: deviceId,
-                        action: 'set_builtin_led',
-                        parameters: {
-                            r: r,
-                            g: g,
-                            b: b
-                        }
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Built-in LED command response:', data);
-                    if (data.status === 'sent') {
-                        console.log(`✅ Built-in LED color command sent to ${deviceId}`);
-                    }
-                })
-                .catch(error => {
-                    console.error('Built-in LED command error:', error);
-                });
-                
-                // Also send LED strip command
-                fetch('/api/command', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        device_id: deviceId,
-                        action: 'set_led_color',
-                        parameters: {
-                            r: r,
-                            g: g,
-                            b: b
-                        }
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    console.log('LED strip command response:', data);
-                    if (data.status === 'sent') {
-                        console.log(`✅ LED strip color command sent to ${deviceId}`);
-                    }
-                })
-                .catch(error => {
-                    console.error('LED strip command error:', error);
-                });
-            }
-            
-            function sendDiagnostic(deviceId) {
-                console.log(`Running LED diagnostic for ${deviceId}`);
-                
-                fetch('/api/command', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        device_id: deviceId,
-                        action: 'led_diagnostic',
-                        parameters: {}
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    console.log('LED diagnostic response:', data);
-                    if (data.status === 'sent') {
-                        console.log(`✅ LED diagnostic command sent to ${deviceId}`);
-                        alert('LED diagnostic started! Check the device LEDs and server console for details.');
-                    }
-                })
-                .catch(error => {
-                    console.error('LED diagnostic error:', error);
-                });
-            }
-            
-            function startDiscovery() {
-                console.log('Starting device discovery...');
-                fetch('/api/discovery', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'}
-                })
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Discovery response:', data);
-                    if (data.status) {
-                        alert('Device discovery started! Check console for details.');
-                    } else if (data.error) {
-                        alert('Discovery failed: ' + data.error);
-                    }
-                })
-                .catch(error => {
-                    console.error('Discovery error:', error);
-                    alert('Failed to start discovery scan');
-                });
-            }
-            
-            function refreshServerInfo() {
-                console.log('Refreshing server info...');
-                fetch('/api/server_info')
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Server info:', data);
-                    document.getElementById('server-ip').textContent = data.server_ip;
-                    document.getElementById('device-count').textContent = data.device_count.toString();
-                    alert(`Server Info Updated!\\nIP: ${data.server_ip}\\nDevices: ${data.device_count}\\nUptime: ${Math.round(data.uptime)}s`);
-                })
-                .catch(error => {
-                    console.error('Server info error:', error);
-                    alert('Failed to refresh server info');
-                });
-            }
-            
-            function addDevice() {
-                const ipInput = document.getElementById('deviceIP');
-                const ipAddress = ipInput.value.trim();
-                
-                if (!ipAddress) {
-                    alert('Please enter an IP address');
-                    return;
-                }
-                
-                console.log('Adding device:', ipAddress);
-                fetch('/api/add_device', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        ip_address: ipAddress
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Add device response:', data);
-                    if (data.status) {
-                        alert('Device add initiated! Check if device appears in the list.');
-                        ipInput.value = ''; // Clear input
-                    } else if (data.error) {
-                        alert('Add device failed: ' + data.error);
-                    }
-                })
-                .catch(error => {
-                    console.error('Add device error:', error);
-                    alert('Failed to add device');
-                });
-            }
-            
-            // Load existing devices when page loads
-            function loadDevices() {
-                fetch('/api/devices')
-                .then(response => response.json())
-                .then(devices => {
-                    console.log('Loaded devices:', devices);
-                    devices.forEach(device => {
-                        window.devicesData[device.device_id] = device;
-                    });
-                    updateDeviceDisplay();
-                })
-                .catch(error => {
-                    console.error('Failed to load devices:', error);
-                });
-            }
-            
-            // Load devices on page load
-            window.addEventListener('load', loadDevices);
-            
-            // sACN Control Functions
-            let sacnEnabled = false;
-            
-            // Load network interfaces when page loads
-            window.addEventListener('load', function() {
-                loadDevices();
-                loadNetworkInterfaces();
-                updateSACNStatus();
-                setInterval(updateSACNStatus, 5000); // Update sACN status every 5 seconds
-                setInterval(() => {
-                    if (sacnEnabled) {
-                        refreshSACNData();
-                    }
-                }, 2000); // Refresh sACN data every 2 seconds when enabled
-            });
-            
-            function loadNetworkInterfaces() {
-                fetch('/api/sacn/interfaces')
-                .then(response => response.json())
-                .then(data => {
-                    const select = document.getElementById('sacnInterface');
-                    select.innerHTML = '<option value="">Select Network Interface...</option>';
-                    
-                    if (data.interfaces) {
-                        data.interfaces.forEach(iface => {
-                            const option = document.createElement('option');
-                            option.value = iface.name;
-                            option.textContent = `${iface.name} (${iface.ip})`;
-                            if (iface.default) {
-                                option.selected = true;
-                            }
-                            select.appendChild(option);
-                        });
-                    }
-                })
-                .catch(error => {
-                    console.error('Failed to load network interfaces:', error);
-                });
-            }
-            
-            function updateSACNStatus() {
-                fetch('/api/sacn/status')
-                .then(response => response.json())
-                .then(data => {
-                    const statusElement = document.getElementById('sacnStatus');
-                    const toggleButton = document.getElementById('sacnToggle');
-                    
-                    sacnEnabled = data.running || false;
-                    
-                    if (sacnEnabled) {
-                        statusElement.textContent = `sACN Receiver Running`;
-                        statusElement.style.background = '#4CAF50';
-                        toggleButton.textContent = 'Disable sACN';
-                        toggleButton.style.background = '#f44336';
-                    } else {
-                        statusElement.textContent = 'sACN Receiver Stopped';
-                        statusElement.style.background = '#ff4444';
-                        toggleButton.textContent = 'Enable sACN';
-                        toggleButton.style.background = '#4CAF50';
-                    }
-                })
-                .catch(error => {
-                    console.error('Failed to update sACN status:', error);
-                });
-            }
-            
-            function refreshSACNData() {
-                const universe = parseInt(document.getElementById('sacnUniverse').value) || 1;
-                
-                fetch(`/api/sacn/universe/${universe}/data`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        document.getElementById('sacnDataTable').innerHTML = 
-                            `<p style="text-align: center; color: #ff4444; padding: 20px;">${data.error}</p>`;
-                        return;
-                    }
-                    
-                    let tableHTML = `
-                        <div style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
-                            <strong>🎭 Tricorder RGB Control:</strong>
-                            <div style="display: inline-block; margin-left: 15px;">
-                                <span style="background: #ff4444; color: white; padding: 2px 8px; border-radius: 3px; margin-right: 5px;">
-                                    Ch1 (Red): ${data.data[0] || 0}
-                                </span>
-                                <span style="background: #44ff44; color: black; padding: 2px 8px; border-radius: 3px; margin-right: 5px;">
-                                    Ch2 (Green): ${data.data[1] || 0}
-                                </span>
-                                <span style="background: #4444ff; color: white; padding: 2px 8px; border-radius: 3px;">
-                                    Ch3 (Blue): ${data.data[2] || 0}
-                                </span>
-                            </div>
-                        </div>
-                        <table style="width: 100%; border-collapse: collapse; font-family: monospace; font-size: 12px;">
-                            <thead>
-                                <tr style="background: #f5f5f5; position: sticky; top: 0;">
-                                    <th style="border: 1px solid #ddd; padding: 8px;">Channel</th>
-                                    <th style="border: 1px solid #ddd; padding: 8px;">Value</th>
-                                    <th style="border: 1px solid #ddd; padding: 8px;">Hex</th>
-                                    <th style="border: 1px solid #ddd; padding: 8px;">%</th>
-                                    <th style="border: 1px solid #ddd; padding: 8px;">Color</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                    `;
-                    
-                    for (let i = 0; i < Math.min(data.data.length, 100); i++) {
-                        const value = data.data[i];
-                        const percentage = Math.round((value / 255) * 100);
-                        const hex = value.toString(16).padStart(2, '0').toUpperCase();
-                        const grayValue = Math.round((value / 255) * 255);
-                        
-                        // Highlight RGB control channels (1, 2, 3)
-                        const isRgbChannel = (i + 1) <= 3;
-                        const channelBg = isRgbChannel ? 
-                            (i === 0 ? '#ffe6e6' : i === 1 ? '#e6ffe6' : '#e6e6ff') : 
-                            (value > 0 ? '#f0f8ff' : '');
-                        const channelLabel = isRgbChannel ? 
-                            (i === 0 ? ' (R)' : i === 1 ? ' (G)' : ' (B)') : '';
-                        
-                        tableHTML += `
-                            <tr style="background: ${channelBg};">
-                                <td style="border: 1px solid #ddd; padding: 4px; text-align: center; font-weight: ${isRgbChannel ? 'bold' : 'normal'};">${i + 1}${channelLabel}</td>
-                                <td style="border: 1px solid #ddd; padding: 4px; text-align: center; font-weight: ${value > 0 ? 'bold' : 'normal'};">${value}</td>
-                                <td style="border: 1px solid #ddd; padding: 4px; text-align: center;">${hex}</td>
-                                <td style="border: 1px solid #ddd; padding: 4px; text-align: center;">${percentage}%</td>
-                                <td style="border: 1px solid #ddd; padding: 4px;">
-                                    <div style="width: 20px; height: 16px; background: rgb(${grayValue},${grayValue},${grayValue}); border: 1px solid #ccc;"></div>
-                                </td>
-                            </tr>
-                        `;
-                    }
-                    
-                    tableHTML += `
-                            </tbody>
-                        </table>
-                        <p style="text-align: center; margin: 10px; color: #666; font-size: 11px;">
-                            Universe ${universe} - Showing channels 1-${Math.min(data.data.length, 100)} of ${data.channels} total
-                        </p>
-                    `;
-                    
-                    document.getElementById('sacnDataTable').innerHTML = tableHTML;
-                })
-                .catch(error => {
-                    console.error('Failed to refresh sACN data:', error);
-                    document.getElementById('sacnDataTable').innerHTML = 
-                        '<p style="text-align: center; color: #ff4444; padding: 20px;">Failed to load sACN data</p>';
-                });
-            }
-            
-            function updateSACNInterface() {
-                const interface = document.getElementById('sacnInterface').value;
-                if (!interface) return;
-                
-                fetch('/api/sacn/interface', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ interface: interface })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        console.log('sACN interface updated:', interface);
-                        updateSACNStatus();
-                    } else {
-                        alert('Failed to update sACN interface: ' + data.message);
-                    }
-                })
-                .catch(error => {
-                    console.error('Failed to update sACN interface:', error);
-                    alert('Failed to update sACN interface');
-                });
-            }
-            
-            function updateSACNUniverse() {
-                const universe = parseInt(document.getElementById('sacnUniverse').value);
-                if (isNaN(universe) || universe < 1 || universe > 63999) {
-                    alert('Universe must be between 1 and 63999');
-                    return;
-                }
-                
-                fetch('/api/sacn/universe', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ universe: universe })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        console.log('sACN universe updated:', universe);
-                        updateSACNStatus();
-                    } else {
-                        alert('Failed to update sACN universe: ' + data.message);
-                    }
-                })
-                .catch(error => {
-                    console.error('Failed to update sACN universe:', error);
-                    alert('Failed to update sACN universe');
-                });
-            }
-            
-            function toggleSACN() {
-                const networkInterface = document.getElementById('networkInterface').value;
-                const universe = parseInt(document.getElementById('sacnUniverse').value) || 1;
-                
-                if (!networkInterface) {
-                    alert('Please select a network interface');
-                    return;
-                }
-                
-                if (universe < 1 || universe > 63999) {
-                    alert('Universe must be between 1 and 63999');
-                    return;
-                }
-                
-                fetch('/api/sacn/toggle', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        interface: networkInterface,
-                        universe: universe
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    updateSACNStatus();
-                    if (data.running) {
-                        refreshSACNData();
-                        console.log('✅ sACN enabled - Tricorders will respond to RGB channels 1,2,3');
-                    } else {
-                        document.getElementById('sacnDataTable').innerHTML = 
-                            '<p style="text-align: center; color: #666; padding: 20px;">sACN receiver stopped</p>';
-                    }
-                })
-                .catch(error => console.error('sACN toggle error:', error));
-            }
-            
-            // Battery Functions
-            function getBatteryColor(percentage) {
-                if (percentage >= 75) return '#4CAF50';  // Green
-                if (percentage >= 50) return '#8BC34A';  // Light Green
-                if (percentage >= 25) return '#FF9800';  // Orange
-                if (percentage >= 10) return '#FF5722';  // Red Orange
-                return '#F44336';  // Red
-            }
-            
-            function requestBatteryUpdate(deviceId) {
-                console.log(`Requesting battery update for ${deviceId}`);
-                
-                fetch(`/api/battery/${deviceId}`)
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Battery response:', data);
-                    if (data.error) {
-                        alert(`Battery Error: ${data.error}`);
-                    } else {
-                        alert(`Battery Status for ${deviceId}:\\n` +
-                              `Voltage: ${data.battery_voltage}V\\n` +
-                              `Percentage: ${data.battery_percentage}%\\n` +
-                              `Status: ${data.battery_status}`);
-                        
-                        // Trigger a device refresh to update the display
-                        loadDevices();
-                    }
-                })
-                .catch(error => {
-                    console.error('Battery request error:', error);
-                    alert('Failed to get battery information');
-                });
-            }
-        </script>
     </body>
     </html>
     '''
@@ -1173,6 +573,180 @@ def get_device_battery(device_id):
         
     except Exception as e:
         print(f"Battery request error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ==========================================
+# Device Configuration API Endpoints
+# ==========================================
+
+@app.route('/api/config/<device_id>', methods=['GET'])
+def get_device_config(device_id):
+    """Get device configuration"""
+    try:
+        if device_id not in devices:
+            return jsonify({'error': f'Device {device_id} not found'}), 404
+        
+        device = devices[device_id]
+        ip_address = device['ip_address']
+        
+        # Send HTTP request to device's /api/config endpoint
+        response = requests.get(f"http://{ip_address}/api/config", timeout=5)
+        
+        if response.status_code == 200:
+            config_data = response.json()
+            return jsonify({
+                'device_id': device_id,
+                'config': config_data,
+                'retrieved_at': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({'error': f'Device returned status {response.status_code}'}), 500
+            
+    except requests.RequestException as e:
+        print(f"Config request error: {e}")
+        return jsonify({'error': f'Failed to connect to device: {str(e)}'}), 500
+    except Exception as e:
+        print(f"Config request error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/config/<device_id>', methods=['POST'])
+def set_device_config(device_id):
+    """Update device configuration"""
+    try:
+        if device_id not in devices:
+            return jsonify({'error': f'Device {device_id} not found'}), 404
+        
+        device = devices[device_id]
+        ip_address = device['ip_address']
+        
+        # Get configuration data from request
+        config_data = request.get_json()
+        if not config_data:
+            return jsonify({'error': 'No configuration data provided'}), 400
+        
+        # Send HTTP POST request to device's /api/config endpoint
+        response = requests.post(
+            f"http://{ip_address}/api/config", 
+            json=config_data,
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            # Broadcast config update to web clients
+            socketio.emit('device_config_updated', {
+                'device_id': device_id,
+                'config': config_data,
+                'result': result,
+                'updated_at': datetime.now().isoformat()
+            })
+            
+            return jsonify({
+                'device_id': device_id,
+                'config': config_data,
+                'result': result,
+                'updated_at': datetime.now().isoformat()
+            })
+        else:
+            error_msg = f'Device returned status {response.status_code}'
+            try:
+                error_data = response.json()
+                if 'error' in error_data:
+                    error_msg = error_data['error']
+            except:
+                pass
+            return jsonify({'error': error_msg}), 500
+            
+    except requests.RequestException as e:
+        print(f"Config update error: {e}")
+        return jsonify({'error': f'Failed to connect to device: {str(e)}'}), 500
+    except Exception as e:
+        print(f"Config update error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/config/<device_id>/factory_reset', methods=['POST'])
+def factory_reset_device(device_id):
+    """Factory reset device configuration"""
+    try:
+        if device_id not in devices:
+            return jsonify({'error': f'Device {device_id} not found'}), 404
+        
+        device = devices[device_id]
+        ip_address = device['ip_address']
+        
+        # Send HTTP POST request to device's /api/factory-reset endpoint
+        response = requests.post(f"http://{ip_address}/api/factory-reset", timeout=10)
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            # Broadcast factory reset notification to web clients
+            socketio.emit('device_factory_reset', {
+                'device_id': device_id,
+                'result': result,
+                'reset_at': datetime.now().isoformat()
+            })
+            
+            return jsonify({
+                'device_id': device_id,
+                'result': result,
+                'reset_at': datetime.now().isoformat()
+            })
+        else:
+            error_msg = f'Device returned status {response.status_code}'
+            try:
+                error_data = response.json()
+                if 'error' in error_data:
+                    error_msg = error_data['error']
+            except:
+                pass
+            return jsonify({'error': error_msg}), 500
+            
+    except requests.RequestException as e:
+        print(f"Factory reset error: {e}")
+        return jsonify({'error': f'Failed to connect to device: {str(e)}'}), 500
+    except Exception as e:
+        print(f"Factory reset error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/config/<device_id>/restart', methods=['POST'])
+def restart_device(device_id):
+    """Restart device"""
+    try:
+        if device_id not in devices:
+            return jsonify({'error': f'Device {device_id} not found'}), 404
+        
+        device = devices[device_id]
+        ip_address = device['ip_address']
+        
+        # Send HTTP POST request to device's /api/restart endpoint
+        response = requests.post(f"http://{ip_address}/api/restart", timeout=5)
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            # Broadcast restart notification to web clients
+            socketio.emit('device_restart', {
+                'device_id': device_id,
+                'result': result,
+                'restart_at': datetime.now().isoformat()
+            })
+            
+            return jsonify({
+                'device_id': device_id,
+                'result': result,
+                'restart_at': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({'error': f'Device returned status {response.status_code}'}), 500
+            
+    except requests.RequestException as e:
+        print(f"Restart error: {e}")
+        return jsonify({'error': f'Failed to connect to device: {str(e)}'}), 500
+    except Exception as e:
+        print(f"Restart error: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ==========================================

@@ -68,15 +68,15 @@ String firmwareVersion = "0.3";
 int sacnUniverse;
 int sacnStartAddress;
 int totalLEDs;
-int ledBrightness;
 String wifiSSID;
 String wifiPassword;
 
 // Hardware objects - Separate arrays for each strip
-CRGB leds1[NUM_LEDS_1];  // Strip 1: D10 (GPIO18), 7 LEDs
-CRGB leds2[NUM_LEDS_2];  // Strip 2: D3 (GPIO21), 4 LEDs
-CRGB leds3[NUM_LEDS_3];  // Strip 3: D4 (GPIO6), 4 LEDs
+CRGB leds1[NUM_LEDS_1];  // Strip 1: D5 (GPIO5), 7 LEDs
+CRGB leds2[NUM_LEDS_2];  // Strip 2: D6 (GPIO16), 4 LEDs
+CRGB leds3[NUM_LEDS_3];  // Strip 3: D8 (GPIO20), 4 LEDs
 WiFiUDP udp;
+WebServer webServer(80);
 
 // State variables
 bool wifiConnected = false;
@@ -785,5 +785,4 @@ void handleFactoryReset() {
   } else {
     webServer.send(500, "application/json", "{\"error\":\"reset_failed\"}");
   }
-}
 }

@@ -356,6 +356,100 @@ Enable serial debugging for detailed diagnostics:
 #endif
 ```
 
+## 🔧 Enhanced System (ESP32-C3)
+
+### **NEW**: Enhanced Firmware for ESP32-C3
+
+We've developed an enhanced firmware system specifically for ESP32-C3 (Seeed Studio XIAO) with professional features:
+
+#### Key Enhanced Features
+- **💾 Persistent Configuration**: All settings stored in ESP32 NVRAM, survives power cycles
+- **🌐 Web-Based Configuration**: Complete web interface for device setup and management
+- **🔍 Auto-Discovery**: Enhanced server automatically finds and manages props
+- **⚙️ Professional SACN**: Individual universe/address per prop with conflict detection
+- **📊 Advanced Dashboard**: Centralized management via enhanced server dashboard
+- **🔄 Easy Deployment**: Cross-platform flashing scripts for simplified deployment
+
+#### Enhanced Hardware Configuration
+```
+ESP32-C3 Pin Layout:
+- D5 (GPIO5)  -> LED Strip 1 (7 LEDs) - Main display
+- D6 (GPIO16) -> LED Strip 2 (4 LEDs) - Secondary indicators  
+- D8 (GPIO20) -> LED Strip 3 (4 LEDs) - Status/effects
+```
+
+#### Quick Deployment
+
+**Step 1**: Flash Enhanced Firmware
+```bash
+# Windows (auto-detect platform)
+cd firmware/polyinoculator
+flash_enhanced_auto.bat
+
+# Or use PowerShell (recommended)
+flash_enhanced.ps1
+
+# Linux/macOS
+./flash_enhanced.sh
+```
+
+**Step 2**: Configure Your Prop
+```bash
+# Run configuration utility
+configure_prop.bat
+
+# Or access web interface directly
+# http://prop-ip-address
+```
+
+**Step 3**: Enhanced Server (Optional)
+```bash
+# Start enhanced server for advanced management
+python server/enhanced_server.py
+
+# Access dashboard at: http://localhost:8000/dashboard
+```
+
+#### Enhanced System Files
+- `polyinoculator/` - Enhanced ESP32-C3 firmware
+- `flash_enhanced_auto.bat` - Auto-platform deployment script
+- `flash_enhanced.ps1` - PowerShell flash script (recommended)
+- `configure_prop.bat` - Configuration utility
+- `test_enhanced_system.bat` - Complete system test
+- `ENHANCED_SYSTEM_GUIDE.md` - Comprehensive documentation
+
+#### Configuration Management
+The enhanced system provides persistent configuration with these categories:
+
+**Device Settings:**
+- Device label and unique prop ID
+- Description and metadata
+
+**SACN/DMX Settings:**
+- SACN universe (1-63999)
+- DMX address (1-512) 
+- Enable/disable SACN control
+
+**LED Configuration:**
+- Brightness control (0-255)
+- Individual strip LED counts
+- Pin assignments
+
+**Network Settings:**
+- WiFi credentials
+- Static IP configuration
+- Hostname assignment
+
+#### Enhanced Server Features
+- **Database Storage**: SQLite database for prop configurations
+- **Conflict Detection**: Automatically identifies SACN address conflicts
+- **Real-time Monitoring**: Live status updates from all props
+- **Bulk Management**: Configure multiple props simultaneously
+- **History Tracking**: Maintains configuration change history
+
+For complete enhanced system documentation, see:
+📖 **[ENHANCED_SYSTEM_GUIDE.md](polyinoculator/ENHANCED_SYSTEM_GUIDE.md)**
+
 ## Future Enhancements
 
 ### Planned Features

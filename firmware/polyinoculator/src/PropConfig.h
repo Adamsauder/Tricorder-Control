@@ -24,6 +24,7 @@ private:
     static const char* KEY_WIFI_SSID;
     static const char* KEY_WIFI_PASSWORD;
     static const char* KEY_FIRST_BOOT;
+    static const char* KEY_FIXTURE_NUMBER;
 
 public:
     struct Config {
@@ -36,6 +37,7 @@ public:
         String wifiSSID;
         String wifiPassword;
         bool firstBoot;
+        int fixtureNumber;
     };
 
     PropConfig();
@@ -72,6 +74,10 @@ public:
     
     String getWiFiPassword();
     bool setWiFiPassword(const String& password);
+    
+    // Fixture configuration
+    int getFixtureNumber();
+    bool setFixtureNumber(int number);
     
     // Utility functions
     bool isFirstBoot();

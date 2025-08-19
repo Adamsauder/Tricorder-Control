@@ -11,7 +11,9 @@
 	"settings": {
 		"powershell.cwd": "Tricorder-Control",
 		"files.associations": {
-			"random": "cpp"
+			"random": "cpp",
+			"chrono": "cpp",
+			"limits": "cpp"
 		}
 	}
 }

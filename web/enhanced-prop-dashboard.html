@@ -402,6 +402,15 @@
             </div>
         </div>
 
+        <div style="text-align: center; margin: 20px 0;">
+            <button onclick="manualCleanup(event)" class="btn btn-secondary" style="margin-right: 10px;">
+                🧹 Clean Offline Devices
+            </button>
+            <button onclick="loadProps()" class="btn btn-primary">
+                🔄 Refresh Devices
+            </button>
+        </div>
+
         <div id="propGrid" class="prop-grid">
             <!-- Props will be dynamically loaded here -->
         </div>
@@ -423,6 +432,10 @@
                     <div class="form-group">
                         <label class="form-label">Device Label</label>
                         <input type="text" class="form-input" id="deviceLabel" placeholder="Enter friendly name">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Fixture Number</label>
+                        <input type="number" class="form-input" id="fixtureNumber" placeholder="1" min="1" max="999">
                     </div>
                     <div class="form-group">
                         <label class="form-label">Device Type</label>
@@ -607,6 +620,7 @@
                         props[device.device_id] = {
                             device_id: device.device_id,
                             device_label: device.device_label || device.device_id,
+                            fixture_number: device.fixture_number || 1,
                             ip_address: device.ip_address,
                             device_type: device.type || 'unknown',
                             sacn_universe: device.sacn_universe || 1,
@@ -692,6 +706,10 @@
                         <span class="detail-value">${prop.device_type}</span>
                     </div>
                     <div class="detail-item">
+                        <span class="detail-label">Fixture #:</span>
+                        <span class="detail-value">${prop.fixture_number || 'N/A'}</span>
+                    </div>
+                    <div class="detail-item">
                         <span class="detail-label">IP Address:</span>
                         <span class="detail-value">${prop.ip_address}</span>
                     </div>
@@ -753,6 +771,7 @@
                     
                     // Populate all form fields
                     document.getElementById('deviceLabel').value = config.deviceLabel || '';
+                    document.getElementById('fixtureNumber').value = config.fixtureNumber || 1;
                     document.getElementById('deviceType').value = config.deviceType || 'tricorder';
                     document.getElementById('wifiSSID').value = config.wifiSSID || '';
                     document.getElementById('wifiPassword').value = config.wifiPassword || '';
@@ -802,6 +821,7 @@
             
             const config = {
                 deviceLabel: document.getElementById('deviceLabel').value,
+                fixtureNumber: parseInt(document.getElementById('fixtureNumber').value),
                 deviceType: document.getElementById('deviceType').value,
                 wifiSSID: document.getElementById('wifiSSID').value,
                 wifiPassword: document.getElementById('wifiPassword').value,
@@ -929,6 +949,42 @@
             document.getElementById('conflictsWarning').style.display = 'block';
             document.getElementById('conflictsList').innerHTML = 
                 '<p>Some props have overlapping DMX address ranges. Check your configuration.</p>';
+        }
+
+        async function manualCleanup(event) {
+            try {
+                console.log('Triggering manual device cleanup...');
+                
+                const response = await fetch('/api/devices/cleanup', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    console.log('Cleanup result:', result);
+                    
+                    // Show success message
+                    const button = event.target;
+                    const originalText = button.innerHTML;
+                    button.innerHTML = '✅ Cleanup Complete';
+                    button.disabled = true;
+                    
+                    // Reset button after 2 seconds
+                    setTimeout(() => {
+                        button.innerHTML = originalText;
+                        button.disabled = false;
+                    }, 2000);
+                    
+                    // Refresh the device list
+                    setTimeout(loadProps, 500);
+                } else {
+                    console.error('Cleanup failed:', response.statusText);
+                    alert('Failed to cleanup offline devices. Check console for details.');
+                }
+            } catch (error) {
+                console.error('Error during cleanup:', error);
+                alert('Error during cleanup: ' + error.message);
+            }
         }
     </script>
 </body>

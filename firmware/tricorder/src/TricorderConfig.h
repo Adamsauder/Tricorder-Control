@@ -10,6 +10,7 @@ struct TricorderConfigData {
   char deviceLabel[32];
   char propId[16];
   char description[64];
+  uint16_t fixtureNumber;     // Fixture/Channel number for lighting console
   
   // SACN/DMX settings
   uint16_t sacnUniverse;
@@ -66,6 +67,8 @@ public:
   const char* getPropId() const;
   void setDescription(const char* desc);
   const char* getDescription() const;
+  void setFixtureNumber(uint16_t number);
+  uint16_t getFixtureNumber() const;
   
   // SACN/DMX settings
   void setSacnUniverse(uint16_t universe);

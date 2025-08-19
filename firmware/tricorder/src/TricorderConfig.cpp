@@ -32,6 +32,7 @@ void TricorderConfig::setDefaults() {
   strcpy(config.deviceLabel, "Tricorder-01");
   strcpy(config.propId, "TRIC001");
   strcpy(config.description, "Enhanced Tricorder Prop");
+  config.fixtureNumber = 1;
   
   // SACN/DMX settings
   config.sacnUniverse = 1;
@@ -116,6 +117,14 @@ void TricorderConfig::setDescription(const char* desc) {
 
 const char* TricorderConfig::getDescription() const {
   return config.description;
+}
+
+void TricorderConfig::setFixtureNumber(uint16_t number) {
+  config.fixtureNumber = number;
+}
+
+uint16_t TricorderConfig::getFixtureNumber() const {
+  return config.fixtureNumber;
 }
 
 // SACN/DMX settings
@@ -275,6 +284,7 @@ String TricorderConfig::toJson() const {
   doc["deviceLabel"] = config.deviceLabel;
   doc["propId"] = config.propId;
   doc["description"] = config.description;
+  doc["fixtureNumber"] = config.fixtureNumber;
   
   // SACN/DMX settings
   doc["sacnUniverse"] = config.sacnUniverse;
@@ -325,6 +335,9 @@ bool TricorderConfig::fromJson(const String& json) {
   }
   if (doc.containsKey("description")) {
     setDescription(doc["description"]);
+  }
+  if (doc.containsKey("fixtureNumber")) {
+    setFixtureNumber(doc["fixtureNumber"]);
   }
   
   // SACN/DMX settings

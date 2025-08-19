@@ -22,7 +22,8 @@
 
 // Pin definitions for ESP32-2432S032C-I
 #define LED_PIN 21         // NeoPixel data pin (external connection) - IO21
-#define NUM_LEDS 3         // Number of NeoPixels in strip (3 front LEDs)
+#define NUM_LEDS 4         // Total LEDs: 1 onboard + 3 front NeoPixels  
+#define NUM_NEOPIXELS 3    // Number of NeoPixels in external strip (front LEDs)
 #define TFT_BL 27          // TFT backlight pin
 #define LED_POWER_EN 22    // LED strip power enable pin (DC-DC converter)
 
@@ -74,7 +75,15 @@
 #define VIDEO_BUFFER_SIZE 65536  // 64KB buffer - reduced from 128KB due to ESP32 memory constraints
 
 // Network settings
-#define UDP_PORT 5000      // Port for UDP status broadcasts
+#define UDP_PORT 8888      // Port for UDP status broadcasts (matches server)
+#define SACN_PORT 5568     // sACN E1.31 standard port
+#define SACN_MULTICAST_BASE "239.255.0.0"  // sACN multicast base address
+
+// sACN E1.31 Constants
+#define ACN_PACKET_IDENTIFIER "ASC-E1.17\0\0\0"
+#define E131_PACKET_SIZE 638
+#define E131_DATA_OFFSET 126
+#define E131_UNIVERSE_OFFSET 113
 
 // Enhanced Configuration System
 TricorderConfig tricorderConfig;
@@ -84,11 +93,11 @@ String deviceId;
 String firmwareVersion = "Enhanced Tricorder v2.0";
 
 // Forward declaration of LED array (defined later)
-extern CRGB leds[NUM_LEDS];
+extern CRGB leds[NUM_NEOPIXELS];
 
 // Helper functions for LED color handling
 void setLEDColor(int index, int r, int g, int b, int w = 0) {
-  if (index < 0 || index >= NUM_LEDS) return;
+  if (index < 0 || index >= NUM_NEOPIXELS) return;
   
   #ifdef LED_TYPE_RGB
     // RGB mode: ignore white channel
@@ -103,18 +112,19 @@ void setLEDColor(int index, int r, int g, int b, int w = 0) {
 
 void setAllLEDs(int r, int g, int b, int w = 0) {
   #ifdef LED_TYPE_RGB
-    fill_solid(leds, NUM_LEDS, CRGB(r, g, b));
+    fill_solid(leds, NUM_NEOPIXELS, CRGB(r, g, b));
   #elif defined(LED_TYPE_RGBW)
-    for (int i = 0; i < NUM_LEDS; i++) {
+    for (int i = 0; i < NUM_NEOPIXELS; i++) {
       setLEDColor(i, r, g, b, w);
     }
   #endif
 }
 
 // Hardware objects
-CRGB leds[NUM_LEDS];
+CRGB leds[NUM_NEOPIXELS];  // Only for NeoPixel strip (front 3 LEDs)
 TFT_eSPI tft = TFT_eSPI();
 WiFiUDP udp;
+WiFiUDP sacnUdp;  // Separate UDP socket for sACN
 WebServer webServer(80);
 JPEGDEC jpeg;
 
@@ -185,6 +195,16 @@ bool isAnimatedSequence = false;
 unsigned long lastStatusSend = 0;
 const unsigned long STATUS_INTERVAL = 10000; // Send status every 10 seconds
 
+// sACN State Variables
+bool sacnEnabled = true;
+int sacnUniverse = 1;
+int sacnStartAddress = 1;  // DMX starting address for this device
+unsigned long lastSacnPacket = 0;
+uint8_t lastSacnData[512] = {0};  // Store last received DMX data
+bool sacnActive = false;  // True when receiving sACN data
+uint8_t sacnSequence = 0;  // Track sACN sequence numbers
+bool sacnPriority = false;  // True when sACN should override UDP LED commands
+
 // Video frame callback
 int JPEGDraw(JPEGDRAW *pDraw) {
   // Draw the JPEG frame to the TFT display
@@ -228,6 +248,14 @@ void performHardwareReset();
 void blinkResetIndicator();
 bool checkResetPinShorted();
 void checkBootButtonReset();
+
+// sACN E1.31 Functions
+void initializeSACN();
+void handleSACNPackets();
+bool processSACNPacket(uint8_t* packet, size_t length);
+void updateLEDsFromDMX(uint8_t* dmxData);
+void setSACNPriority(bool enabled);
+String getMulticastAddress(int universe);
 
 // Dual-core task functions
 void ledTask(void *pvParameters);
@@ -311,7 +339,7 @@ void setup() {
   delay(100); // Allow power to stabilize
   
   // Initialize LEDs
-  FastLED.addLeds<LED_CHIPSET, LED_PIN, LED_COLOR_ORDER>(leds, NUM_LEDS);
+  FastLED.addLeds<LED_CHIPSET, LED_PIN, LED_COLOR_ORDER>(leds, NUM_NEOPIXELS);
   FastLED.setBrightness(ledBrightness);
   
   // Initialize built-in RGB LED pins
@@ -779,6 +807,202 @@ void ledTask(void *pvParameters) {
   }
 }
 
+// ============================================================================
+// sACN E1.31 Implementation
+// ============================================================================
+
+// Initialize sACN receiver
+void initializeSACN() {
+  if (!sacnEnabled) {
+    Serial.println("sACN disabled in configuration");
+    return;
+  }
+  
+  // Get sACN configuration from tricorderConfig
+  sacnUniverse = tricorderConfig.getSacnUniverse();
+  sacnStartAddress = tricorderConfig.getDmxAddress();
+  
+  Serial.printf("Initializing sACN: Universe %d, Address %d\n", sacnUniverse, sacnStartAddress);
+  
+  // Calculate multicast address for our universe
+  String multicastAddr = getMulticastAddress(sacnUniverse);
+  IPAddress multicastIP;
+  if (!multicastIP.fromString(multicastAddr)) {
+    Serial.printf("❌ Invalid multicast address: %s\n", multicastAddr.c_str());
+    return;
+  }
+  
+  // Start sACN UDP socket
+  if (sacnUdp.beginMulticast(multicastIP, SACN_PORT)) {
+    Serial.printf("✅ sACN receiver started: %s:%d\n", multicastAddr.c_str(), SACN_PORT);
+  } else {
+    Serial.println("❌ Failed to start sACN receiver");
+    sacnEnabled = false;
+  }
+}
+
+// Handle incoming sACN packets
+void handleSACNPackets() {
+  if (!sacnEnabled || !wifiConnected) return;
+  
+  int packetSize = sacnUdp.parsePacket();
+  if (packetSize > 0) {
+    uint8_t packet[E131_PACKET_SIZE];
+    int bytesRead = sacnUdp.read(packet, min(packetSize, E131_PACKET_SIZE));
+    
+    if (bytesRead > 0) {
+      if (processSACNPacket(packet, bytesRead)) {
+        lastSacnPacket = millis();
+        sacnActive = true;
+        sacnPriority = true;  // Enable sACN priority when receiving data
+      }
+    }
+  }
+  
+  // Disable sACN priority if no packets received for 2 seconds
+  if (sacnActive && (millis() - lastSacnPacket > 2000)) {
+    sacnActive = false;
+    sacnPriority = false;
+    Serial.println("sACN timeout - switching to UDP control");
+  }
+}
+
+// Process received sACN E1.31 packet
+bool processSACNPacket(uint8_t* packet, size_t length) {
+  // Validate minimum packet size
+  if (length < E131_DATA_OFFSET) {
+    return false;
+  }
+  
+  // Check ACN packet identifier
+  if (memcmp(packet + 4, ACN_PACKET_IDENTIFIER, 12) != 0) {
+    return false;
+  }
+  
+  // Extract universe (bytes 113-114, big endian)
+  uint16_t universe = (packet[E131_UNIVERSE_OFFSET] << 8) | packet[E131_UNIVERSE_OFFSET + 1];
+  
+  // Check if this packet is for our universe
+  if (universe != sacnUniverse) {
+    return false;
+  }
+  
+  // Extract sequence number for duplicate detection
+  uint8_t sequence = packet[111];
+  
+  // Simple sequence checking (handles wrap-around)
+  if (sequence != sacnSequence + 1 && sequence != 0) {
+    // Packet out of order or duplicate - still process but note it
+    // In production, you might want more sophisticated duplicate detection
+  }
+  sacnSequence = sequence;
+  
+  // Extract DMX data (starts at byte 126)
+  uint8_t* dmxData = packet + E131_DATA_OFFSET;
+  size_t dmxLength = length - E131_DATA_OFFSET;
+  
+  // Copy DMX data and update LEDs
+  if (dmxLength >= sacnStartAddress + (NUM_LEDS * CHANNELS_PER_LED)) {
+    memcpy(lastSacnData, dmxData, (dmxLength < 512) ? dmxLength : 512);
+    updateLEDsFromDMX(dmxData);
+    return true;
+  }
+  
+  return false;
+}
+
+// Update LEDs based on DMX data
+void updateLEDsFromDMX(uint8_t* dmxData) {
+  if (!sacnEnabled || !sacnPriority) return;
+  
+  // Calculate starting index in DMX data (DMX is 1-based, arrays are 0-based)
+  int dmxIndex = sacnStartAddress - 1;
+  
+  // Update NeoPixel strip (first 3 LEDs)
+  for (int i = 0; i < NUM_NEOPIXELS; i++) {
+    #ifdef LED_TYPE_RGB
+      // RGB: 3 channels per LED
+      int r = dmxData[dmxIndex + (i * 3) + 0];
+      int g = dmxData[dmxIndex + (i * 3) + 1];
+      int b = dmxData[dmxIndex + (i * 3) + 2];
+      leds[i] = CRGB(r, g, b);
+    #elif defined(LED_TYPE_RGBW)
+      // RGBW: 4 channels per LED
+      int r = dmxData[dmxIndex + (i * 4) + 0];
+      int g = dmxData[dmxIndex + (i * 4) + 1];
+      int b = dmxData[dmxIndex + (i * 4) + 2];
+      int w = dmxData[dmxIndex + (i * 4) + 3];
+      
+      // For RGBW, we need to handle the white channel
+      // This is a simplified approach - actual RGBW mixing is more complex
+      leds[i] = CRGB(r + w/3, g + w/3, b + w/3);  // Approximate white mixing
+    #endif
+  }
+  
+  // Update onboard LED (4th pixel) - separate PWM control
+  #ifdef LED_TYPE_RGB
+    // Onboard LED uses next 3 channels after the NeoPixel strip
+    int onboardIndex = dmxIndex + (NUM_NEOPIXELS * 3);
+    
+    // Bounds check to prevent reading beyond DMX array
+    if (onboardIndex + 2 < 512) {
+      int onboard_r = dmxData[onboardIndex + 0];
+      int onboard_g = dmxData[onboardIndex + 1];
+      int onboard_b = dmxData[onboardIndex + 2];
+      setBuiltinLED(onboard_r, onboard_g, onboard_b);
+    } else {
+      // If beyond bounds, turn off onboard LED
+      setBuiltinLED(0, 0, 0);
+    }
+  #elif defined(LED_TYPE_RGBW)
+    // Onboard LED uses next 4 channels after the NeoPixel strip
+    int onboardIndex = dmxIndex + (NUM_NEOPIXELS * 4);
+    
+    // Bounds check to prevent reading beyond DMX array
+    if (onboardIndex + 2 < 512) {
+      int onboard_r = dmxData[onboardIndex + 0];
+      int onboard_g = dmxData[onboardIndex + 1];
+      int onboard_b = dmxData[onboardIndex + 2];
+      // Skip white channel for onboard LED (only RGB)
+      setBuiltinLED(onboard_r, onboard_g, onboard_b);
+    } else {
+      // If beyond bounds, turn off onboard LED
+      setBuiltinLED(0, 0, 0);
+    }
+  #endif
+  
+  // Apply brightness from configuration and update NeoPixels
+  FastLED.setBrightness(tricorderConfig.getBrightness());
+  FastLED.show();
+}
+
+// Set sACN priority mode
+void setSACNPriority(bool enabled) {
+  sacnPriority = enabled;
+  if (enabled) {
+    Serial.println("sACN priority enabled - ignoring UDP LED commands");
+  } else {
+    Serial.println("sACN priority disabled - accepting UDP LED commands");
+    // When sACN priority is disabled, ensure onboard LED is off to prevent flicker
+    setBuiltinLED(0, 0, 0);
+  }
+}
+
+// Calculate multicast address for sACN universe
+String getMulticastAddress(int universe) {
+  // sACN uses multicast addresses 239.255.0.1 through 239.255.255.255
+  // Universe 1 = 239.255.0.1, Universe 2 = 239.255.0.2, etc.
+  int subnet = (universe >> 8) & 0xFF;
+  int host = universe & 0xFF;
+  
+  if (subnet == 0) {
+    subnet = 0;
+    host = universe;
+  }
+  
+  return String("239.255.") + String(subnet) + "." + String(host);
+}
+
 // Network Task - Runs on Core 0 for UDP/WiFi handling
 void networkTask(void *pvParameters) {
   Serial.printf("Network Task starting on Core: %d\n", xPortGetCoreID());
@@ -810,9 +1034,15 @@ void networkTask(void *pvParameters) {
   // Main network loop
   unsigned long lastStatusSend = 0;
   
+  // Initialize sACN after network is ready
+  initializeSACN();
+  
   while (true) {
     // Handle UDP commands if connected
     if (wifiConnected) {
+      // Handle sACN packets (high priority for lighting)
+      handleSACNPackets();
+      
       int packetSize = udp.parsePacket();
       if (packetSize) {
         char incomingPacket[255];
@@ -914,7 +1144,7 @@ void processNetworkCommand(String jsonCommand) {
       ledCmd.r = doc["r"];
       ledCmd.g = doc["g"];
       ledCmd.b = doc["b"];
-      ledCmd.w = doc.containsKey("w") ? doc["w"] : 0;  // White channel optional for RGB compatibility
+      ledCmd.w = doc["w"].is<int>() ? doc["w"] : 0;  // White channel optional for RGB compatibility
       
       Serial.printf("Network task sending LED command R:%d G:%d B:%d W:%d\n", ledCmd.r, ledCmd.g, ledCmd.b, ledCmd.w);
       BaseType_t result = xQueueSend(ledCommandQueue, &ledCmd, 0);
@@ -940,11 +1170,11 @@ void processNetworkCommand(String jsonCommand) {
       bool loop = false;
       
       // Check if filename is in parameters object (new format) or directly (legacy)
-      if (doc.containsKey("parameters")) {
-        if (doc["parameters"].containsKey("filename")) {
+      if (doc["parameters"].is<JsonObject>()) {
+        if (doc["parameters"]["filename"].is<String>()) {
           filename = doc["parameters"]["filename"].as<String>();
         }
-        if (doc["parameters"].containsKey("loop")) {
+        if (doc["parameters"]["loop"].is<bool>()) {
           loop = doc["parameters"]["loop"];
         }
       } else {
@@ -952,7 +1182,7 @@ void processNetworkCommand(String jsonCommand) {
         if (doc.containsKey("filename")) {
           filename = doc["filename"].as<String>();
         }
-        if (doc.containsKey("loop")) {
+        if (doc["loop"].is<bool>()) {
           loop = doc["loop"];
         }
       }
@@ -974,9 +1204,9 @@ void processNetworkCommand(String jsonCommand) {
       String filename;
       
       // Check if filename is in parameters object (new format) or directly (legacy)
-      if (doc.containsKey("parameters") && doc["parameters"].containsKey("filename")) {
+      if (doc["parameters"].is<JsonObject>() && doc["parameters"]["filename"].is<String>()) {
         filename = doc["parameters"]["filename"].as<String>();
-      } else if (doc.containsKey("filename")) {
+      } else if (doc["filename"].is<String>()) {
         filename = doc["filename"].as<String>();
       } else {
         filename = ""; // Empty filename
@@ -1027,14 +1257,14 @@ void processNetworkCommand(String jsonCommand) {
       analogReadResolution(12);        // 12-bit resolution
       
       int testPins[] = {34, 35, 36, 39, 32, 33};
-      JsonArray adcReadings = debugDoc.createNestedArray("adcReadings");
+      JsonArray adcReadings = debugDoc["adcReadings"].to<JsonArray>();
       
       for (int i = 0; i < 6; i++) {
         int pin = testPins[i];
         int rawReading = analogRead(pin);
         float voltage = (rawReading / 4095.0) * 3.3;
         
-        JsonObject reading = adcReadings.createNestedObject();
+        JsonObject reading = adcReadings.add<JsonObject>();
         reading["pin"] = pin;
         reading["rawValue"] = rawReading;
         reading["voltage"] = voltage;
@@ -1061,6 +1291,60 @@ void processNetworkCommand(String jsonCommand) {
       udp.write((const uint8_t*)response.c_str(), response.length());
       udp.endPacket();
     }
+    // sACN Control Commands
+    else if (action == "enable_sacn") {
+      sacnEnabled = true;
+      if (wifiConnected) {
+        initializeSACN();
+      }
+      sendResponse(commandId, "sACN enabled");
+    }
+    else if (action == "disable_sacn") {
+      sacnEnabled = false;
+      sacnPriority = false;
+      sacnActive = false;
+      sacnUdp.stop();
+      sendResponse(commandId, "sACN disabled");
+    }
+    else if (action == "set_sacn_universe") {
+      int universe = doc["universe"];
+      sacnUniverse = universe;
+      tricorderConfig.setSacnUniverse(universe);
+      tricorderConfig.save();
+      
+      // Restart sACN with new universe
+      if (sacnEnabled && wifiConnected) {
+        sacnUdp.stop();
+        initializeSACN();
+      }
+      sendResponse(commandId, "sACN universe set to " + String(universe));
+    }
+    else if (action == "set_sacn_address") {
+      int address = doc["address"];
+      sacnStartAddress = address;
+      tricorderConfig.setDmxAddress(address);
+      tricorderConfig.save();
+      sendResponse(commandId, "sACN start address set to " + String(address));
+    }
+    else if (action == "get_sacn_status") {
+      JsonDocument sacnStatus;
+      sacnStatus["commandId"] = commandId;
+      sacnStatus["deviceId"] = deviceId;
+      sacnStatus["sacnEnabled"] = sacnEnabled;
+      sacnStatus["sacnUniverse"] = sacnUniverse;
+      sacnStatus["sacnStartAddress"] = sacnStartAddress;
+      sacnStatus["sacnActive"] = sacnActive;
+      sacnStatus["sacnPriority"] = sacnPriority;
+      sacnStatus["lastPacketTime"] = lastSacnPacket;
+      sacnStatus["channelsPerLed"] = CHANNELS_PER_LED;
+      sacnStatus["totalChannels"] = NUM_LEDS * CHANNELS_PER_LED;
+      
+      String response;
+      serializeJson(sacnStatus, response);
+      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      udp.print(response);
+      udp.endPacket();
+    }
   }
 }
 
@@ -1070,6 +1354,12 @@ void handleUDPCommands() {
 }
 
 void setLEDColorCommand(int r, int g, int b, int w = 0) {
+  // Check if sACN has priority - if so, ignore UDP LED commands
+  if (sacnPriority && sacnActive) {
+    Serial.println("Ignoring UDP LED command - sACN active");
+    return;
+  }
+  
   // Send command to LED task for thread-safe execution
   LEDCommand cmd;
   cmd.type = LEDCommand::SET_COLOR;
@@ -1084,6 +1374,12 @@ void setLEDColorCommand(int r, int g, int b, int w = 0) {
 }
 
 void setLEDBrightness(int brightness) {
+  // Check if sACN has priority - if so, ignore UDP LED commands
+  if (sacnPriority && sacnActive) {
+    Serial.println("Ignoring UDP LED brightness command - sACN active");
+    return;
+  }
+  
   // Send command to LED task for thread-safe execution
   LEDCommand cmd;
   cmd.type = LEDCommand::SET_BRIGHTNESS;
@@ -1096,6 +1392,12 @@ void setLEDBrightness(int brightness) {
 
 // Set individual LED color (0-2 for the 3 front LEDs)
 void setIndividualLED(int ledIndex, int r, int g, int b) {
+  // Check if sACN has priority - if so, ignore UDP LED commands
+  if (sacnPriority && sacnActive) {
+    Serial.println("Ignoring UDP individual LED command - sACN active");
+    return;
+  }
+  
   // Send command to LED task for thread-safe execution
   LEDCommand cmd;
   cmd.type = LEDCommand::SET_INDIVIDUAL;
@@ -1111,6 +1413,12 @@ void setIndividualLED(int ledIndex, int r, int g, int b) {
 
 // Create a scanner/Kitt effect across the 3 LEDs
 void scannerEffect(int r, int g, int b, int delayMs) {
+  // Check if sACN has priority - if so, ignore UDP LED commands
+  if (sacnPriority && sacnActive) {
+    Serial.println("Ignoring UDP scanner effect command - sACN active");
+    return;
+  }
+  
   // Send command to LED task for thread-safe execution
   LEDCommand cmd;
   cmd.type = LEDCommand::SCANNER_EFFECT;
@@ -1126,6 +1434,12 @@ void scannerEffect(int r, int g, int b, int delayMs) {
 
 // Pulse all LEDs (breathing effect)
 void pulseEffect(int r, int g, int b, int duration) {
+  // Check if sACN has priority - if so, ignore UDP LED commands
+  if (sacnPriority && sacnActive) {
+    Serial.println("Ignoring UDP pulse effect command - sACN active");
+    return;
+  }
+  
   // Send command to LED task for thread-safe execution
   LEDCommand cmd;
   cmd.type = LEDCommand::PULSE_EFFECT;
@@ -1158,6 +1472,7 @@ void sendStatus(String commandId) {
   JsonDocument doc;
   doc["commandId"] = commandId;
   doc["deviceId"] = deviceId;
+  doc["fixtureNumber"] = tricorderConfig.getFixtureNumber();
   doc["firmwareVersion"] = firmwareVersion;
   doc["wifiConnected"] = wifiConnected;
   doc["ipAddress"] = WiFi.localIP().toString();
@@ -1190,6 +1505,7 @@ void sendPeriodicStatus() {
   doc["deviceId"] = deviceId;
   doc["type"] = "tricorder";
   doc["deviceLabel"] = tricorderConfig.getDeviceLabel();
+  doc["fixtureNumber"] = tricorderConfig.getFixtureNumber();
   doc["firmwareVersion"] = firmwareVersion;
   doc["wifiConnected"] = wifiConnected;
   doc["ipAddress"] = WiFi.localIP().toString();
@@ -1220,13 +1536,21 @@ void sendPeriodicStatus() {
 }
 
 void setBuiltinLED(int r, int g, int b) {
+  // Apply minimum threshold to prevent flicker from very low values
+  // Values below 8 (about 3% of 255) are treated as completely off
+  const int MIN_THRESHOLD = 8;
+  
+  if (r < MIN_THRESHOLD) r = 0;
+  if (g < MIN_THRESHOLD) g = 0;
+  if (b < MIN_THRESHOLD) b = 0;
+  
   // Note: These LEDs are typically inverted (LOW = ON, HIGH = OFF)
   // Adjust based on your board's behavior
   analogWrite(RGB_LED_R, 255 - r);  // Inverted PWM
   analogWrite(RGB_LED_G, 255 - g);  // Inverted PWM  
   analogWrite(RGB_LED_B, 255 - b);  // Inverted PWM
   
-  Serial.printf("Built-in RGB LED set to R:%d G:%d B:%d\n", r, g, b);
+  Serial.printf("Built-in RGB LED set to R:%d G:%d B:%d (thresholded)\n", r, g, b);
 }
 
 bool playVideo(String filename, bool loop) {
@@ -2443,7 +2767,7 @@ void handleSetConfig() {
 }
 
 void handleGetStatus() {
-  DynamicJsonDocument doc(1024);
+  JsonDocument doc;
   
   doc["deviceLabel"] = tricorderConfig.getDeviceLabel();
   doc["propId"] = tricorderConfig.getPropId();

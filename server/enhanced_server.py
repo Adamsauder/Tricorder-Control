@@ -74,25 +74,28 @@ def auto_configure_tricorder_for_sacn(device_id: str, device_info: dict):
     if not sacn_receiver:
         return
         
-    # Configure tricorder to respond to RGB channels 1, 2, 3 for built-in LED
-    # and LED strip (if present)
+    # Configure tricorder to respond to RGB channels for 4 total LEDs:
+    # Channels 1-3: Front NeoPixel strip LED #1 (RGB)
+    # Channels 4-6: Front NeoPixel strip LED #2 (RGB) 
+    # Channels 7-9: Front NeoPixel strip LED #3 (RGB)
+    # Channels 10-12: Onboard LED (RGB)
     try:
         # Remove any existing configuration
         sacn_receiver.remove_device(device_id)
         
-        # Add device with RGB channels 1, 2, 3 for both built-in LED and LED strip
+        # Add device with 4 LEDs total (3 NeoPixel strip + 1 onboard)
         success = sacn_receiver.add_device(
             device_id=device_id,
             ip_address=device_info['ip_address'],
             universe=CONFIG['sacn_universe'],  # Use configured universe
-            start_channel=1,  # Not used for uniform strip control
-            num_leds=3,  # Enable LED strip with 3 LEDs
-            builtin_led_channels=(1, 2, 3),  # RGB on channels 1, 2, 3 for both built-in and strip
+            start_channel=1,  # Start at channel 1 for first LED
+            num_leds=4,  # 4 total LEDs (3 NeoPixel + 1 onboard)
+            builtin_led_channels=None,  # Onboard LED is now part of the 4-LED array
             device_type="tricorder"  # Mark as tricorder
         )
         
         if success:
-            print(f"✅ Auto-configured {device_id} for sACN RGB control (channels 1,2,3 - built-in LED + LED strip)")
+            print(f"✅ Auto-configured {device_id} for sACN RGB control (4 LEDs: 3 NeoPixel strip + 1 onboard)")
         else:
             print(f"⚠️ Failed to auto-configure {device_id} for sACN")
             
@@ -202,6 +205,7 @@ class TricorderServer:
                 'device_id': device_id,
                 'device_type': device_type,
                 'device_label': data.get('deviceLabel', device_id),  # Use deviceLabel if available, fallback to device_id
+                'fixture_number': data.get('fixtureNumber', 1),  # Default to fixture 1 if not specified
                 'ip_address': addr[0],
                 'port': addr[1],
                 'last_seen': datetime.now().isoformat(),
@@ -267,6 +271,71 @@ class TricorderServer:
 # Initialize server
 server = TricorderServer()
 
+def cleanup_offline_devices():
+    """Remove devices that haven't been seen within the timeout period"""
+    global devices
+    current_time = datetime.now()
+    timeout_seconds = CONFIG['device_timeout']
+    
+    offline_devices = []
+    
+    for device_id, device_info in list(devices.items()):
+        try:
+            last_seen_str = device_info.get('last_seen')
+            if not last_seen_str:
+                continue
+                
+            last_seen = datetime.fromisoformat(last_seen_str.replace('Z', '+00:00'))
+            # Handle timezone-naive datetime by assuming local timezone
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=None)
+                current_time_local = current_time.replace(tzinfo=None)
+            else:
+                current_time_local = current_time
+            
+            time_diff = (current_time_local - last_seen).total_seconds()
+            
+            if time_diff > timeout_seconds:
+                offline_devices.append(device_id)
+                
+        except (ValueError, TypeError) as e:
+            print(f"⚠️ Error parsing last_seen for {device_id}: {e}")
+            # If we can't parse the timestamp, consider it old and remove it
+            offline_devices.append(device_id)
+    
+    # Remove offline devices
+    for device_id in offline_devices:
+        device_info = devices.pop(device_id, {})
+        print(f"🔌 Removed offline device: {device_id} (last seen: {device_info.get('last_seen', 'unknown')})")
+        
+        # Remove from sACN receiver if configured
+        if SACN_AVAILABLE:
+            sacn_receiver = get_sacn_receiver()
+            if sacn_receiver:
+                sacn_receiver.remove_device(device_id)
+        
+        # Notify web clients
+        socketio.emit('device_removed', {
+            'device_id': device_id,
+            'reason': 'timeout',
+            'last_seen': device_info.get('last_seen')
+        })
+    
+    if offline_devices:
+        print(f"🧹 Cleanup completed: removed {len(offline_devices)} offline devices")
+        # Emit updated device list
+        socketio.emit('devices_update', list(devices.values()))
+
+def device_cleanup_task():
+    """Background task to periodically clean up offline devices"""
+    while True:
+        try:
+            cleanup_offline_devices()
+            time.sleep(CONFIG['device_timeout'] // 2)  # Check every half timeout period
+        except Exception as e:
+            print(f"❌ Error in device cleanup task: {e}")
+            time.sleep(10)  # Wait 10 seconds before retrying
+
 @app.route('/')
 def index():
     """Main web interface - serve enhanced dashboard"""
@@ -303,6 +372,23 @@ def basic_interface():
 def get_devices():
     """Get all connected devices"""
     return jsonify(list(devices.values()))
+
+@app.route('/api/devices/cleanup', methods=['POST'])
+def manual_device_cleanup():
+    """Manually trigger device cleanup"""
+    try:
+        cleanup_offline_devices()
+        return jsonify({
+            'success': True,
+            'message': 'Device cleanup completed',
+            'active_devices': len(devices),
+            'device_timeout': CONFIG['device_timeout']
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
 
 @app.route('/api/server_info')
 def get_server_info():
@@ -1092,6 +1178,11 @@ if __name__ == '__main__':
     # Start UDP server in background
     udp_thread = threading.Thread(target=run_udp_server, daemon=True)
     udp_thread.start()
+    
+    # Start device cleanup task in background
+    cleanup_thread = threading.Thread(target=device_cleanup_task, daemon=True)
+    cleanup_thread.start()
+    print(f"Device cleanup task started (timeout: {CONFIG['device_timeout']}s)")
     
     # Run Flask app
     socketio.run(app, host='0.0.0.0', port=CONFIG['web_port'], debug=False)

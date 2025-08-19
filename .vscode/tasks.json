@@ -103,6 +103,77 @@
       "problemMatcher": []
     },
     {
+      "label": "Compile Defragmentor Firmware",
+      "type": "shell",
+      "command": "pio",
+      "args": ["run"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/defragmentor"
+      },
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/firmware/defragmentor"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    },
+    {
+      "label": "Upload Defragmentor Firmware",
+      "type": "shell",
+      "command": "pio",
+      "args": ["run", "--target", "upload"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/defragmentor"
+      },
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/firmware/defragmentor"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    },
+    {
+      "label": "Build and Upload Defragmentor",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Compile Defragmentor Firmware",
+        "Upload Defragmentor Firmware"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      }
+    },
+    {
       "label": "Setup Complete Development Environment",
       "dependsOrder": "sequence",
       "dependsOn": [

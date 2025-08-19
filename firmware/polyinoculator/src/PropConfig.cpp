@@ -15,6 +15,7 @@ const char* PropConfig::KEY_BRIGHTNESS = "brightness";
 const char* PropConfig::KEY_WIFI_SSID = "wifi_ssid";
 const char* PropConfig::KEY_WIFI_PASSWORD = "wifi_pass";
 const char* PropConfig::KEY_FIRST_BOOT = "first_boot";
+const char* PropConfig::KEY_FIXTURE_NUMBER = "fixture_num";
 
 PropConfig::PropConfig() {
 }
@@ -42,6 +43,7 @@ bool PropConfig::loadConfig(Config& config) {
     config.wifiSSID = prefs.getString(KEY_WIFI_SSID, "Rigging Electric");
     config.wifiPassword = prefs.getString(KEY_WIFI_PASSWORD, "academy123");
     config.firstBoot = prefs.getBool(KEY_FIRST_BOOT, true);
+    config.fixtureNumber = prefs.getInt(KEY_FIXTURE_NUMBER, 1);
     
     prefs.end();
     return true;
@@ -62,6 +64,7 @@ bool PropConfig::saveConfig(const Config& config) {
     success &= prefs.putString(KEY_WIFI_SSID, config.wifiSSID);
     success &= prefs.putString(KEY_WIFI_PASSWORD, config.wifiPassword);
     success &= prefs.putBool(KEY_FIRST_BOOT, config.firstBoot);
+    success &= prefs.putInt(KEY_FIXTURE_NUMBER, config.fixtureNumber);
     
     prefs.end();
     return success;
@@ -78,6 +81,7 @@ bool PropConfig::resetToDefaults() {
     defaultConfig.wifiSSID = "Rigging Electric";
     defaultConfig.wifiPassword = "academy123";
     defaultConfig.firstBoot = true;
+    defaultConfig.fixtureNumber = 1;
     
     return saveConfig(defaultConfig);
 }
@@ -198,6 +202,20 @@ bool PropConfig::setWiFiPassword(const String& password) {
     return success;
 }
 
+int PropConfig::getFixtureNumber() {
+    if (!prefs.begin(NAMESPACE, true)) return 1;
+    int value = prefs.getInt(KEY_FIXTURE_NUMBER, 1);
+    prefs.end();
+    return value;
+}
+
+bool PropConfig::setFixtureNumber(int number) {
+    if (!prefs.begin(NAMESPACE, false)) return false;
+    bool success = prefs.putInt(KEY_FIXTURE_NUMBER, number);
+    prefs.end();
+    return success;
+}
+
 bool PropConfig::isFirstBoot() {
     if (!prefs.begin(NAMESPACE, true)) return true;
     bool value = prefs.getBool(KEY_FIRST_BOOT, true);
@@ -285,6 +303,7 @@ void PropConfig::printConfig() {
     Serial.printf("Device Type: %s\n", config.deviceType.c_str());
     Serial.printf("Number of LEDs: %d\n", config.numLeds);
     Serial.printf("Brightness: %d\n", config.brightness);
+    Serial.printf("Fixture Number: %d\n", config.fixtureNumber);
     Serial.printf("WiFi SSID: %s\n", config.wifiSSID.c_str());
     Serial.printf("First Boot: %s\n", config.firstBoot ? "true" : "false");
     Serial.println("========================");

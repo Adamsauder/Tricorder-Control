@@ -680,8 +680,12 @@
             // Hide discovery status
             document.getElementById('discoveryStatus').style.display = 'none';
 
+            // Check for conflicts in our props data
+            const addressConflicts = checkAddressConflicts();
+            document.getElementById('addressConflicts').textContent = addressConflicts;
+            
             // Show conflicts warning if any
-            if (data.address_conflicts > 0) {
+            if (addressConflicts > 0) {
                 showConflictsWarning();
             }
         }
@@ -739,6 +743,14 @@
                         <a href="http://${prop.ip_address}" target="_blank" class="btn btn-secondary">
                             Web Interface
                         </a>
+                    ` : ''}
+                    ${(prop.device_type === 'tricorder' || prop.device_id.startsWith('TRICORDER_') || prop.device_id.startsWith('TRIC')) ? `
+                        <button class="btn" style="background: #4CAF50; color: white;" onclick="displayImage('${prop.device_id}', 'greenscreen.jpg')">
+                            Green Screen
+                        </button>
+                        <button class="btn" style="background: #2196F3; color: white;" onclick="displayImage('${prop.device_id}', 'test.jpg')">
+                            Test Image
+                        </button>
                     ` : ''}
                     <button class="btn btn-danger" onclick="factoryReset('${prop.device_id}')">
                         Factory Reset
@@ -949,6 +961,51 @@
             document.getElementById('conflictsWarning').style.display = 'block';
             document.getElementById('conflictsList').innerHTML = 
                 '<p>Some props have overlapping DMX address ranges. Check your configuration.</p>';
+        }
+
+        function checkAddressConflicts() {
+            // Simple conflict detection - count overlapping address ranges
+            const ranges = Object.values(props).map(prop => ({
+                start: prop.dmx_start_address,
+                end: prop.dmx_start_address + (prop.num_leds * 3) - 1,
+                universe: prop.sacn_universe
+            }));
+            
+            let conflicts = 0;
+            for (let i = 0; i < ranges.length; i++) {
+                for (let j = i + 1; j < ranges.length; j++) {
+                    const a = ranges[i];
+                    const b = ranges[j];
+                    // Check if same universe and overlapping ranges
+                    if (a.universe === b.universe && 
+                        !(a.end < b.start || b.end < a.start)) {
+                        conflicts++;
+                    }
+                }
+            }
+            return conflicts;
+        }
+
+        function displayImage(deviceId, filename) {
+            // Send display_image command to the device via enhanced server
+            fetch('/api/command', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    device_id: deviceId,
+                    action: 'display_image',
+                    parameters: { filename: filename }
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log(`Sent display image command to ${deviceId}: ${filename}`, data);
+            })
+            .catch(error => {
+                console.error('Error sending display image command:', error);
+            });
         }
 
         async function manualCleanup(event) {

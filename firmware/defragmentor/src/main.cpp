@@ -671,7 +671,22 @@ void setupWebServer() {
     }
     
     if (configChanged) {
-      Serial.println("Configuration updated via API");
+      // Update the main config struct with all current values
+      config.deviceLabel = deviceLabel;
+      config.fixtureNumber = fixtureNumber;
+      config.sacnUniverse = sacnUniverse;
+      config.dmxStartAddress = sacnStartAddress;
+      config.brightness = ledBrightness;
+      config.wifiSSID = wifiSSID;
+      config.wifiPassword = wifiPassword;
+      
+      // Save all changes to NVS
+      if (propConfig.saveConfig(config)) {
+        Serial.println("Configuration updated and saved to NVS");
+      } else {
+        Serial.println("Configuration updated but failed to save to NVS");
+      }
+      
       propConfig.printConfig();
       request->send(200, "application/json", "{\"status\":\"updated\"}");
     } else {
@@ -740,6 +755,7 @@ void loadConfiguration() {
   }
   
   Serial.println("Configuration loaded:");
+  Serial.printf("LED brightness will be set to: %d\n", ledBrightness);
   propConfig.printConfig();
 }
 

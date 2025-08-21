@@ -330,3 +330,26 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nShutting down...")
         controller.stop()
+
+
+# Global controller instance for backwards compatibility
+_enhanced_controller: Optional[EnhancedSACNController] = None
+
+def initialize_sacn_receiver(interface_ip: str = "0.0.0.0") -> 'EnhancedSACNController':
+    """Initialize the global enhanced sACN controller"""
+    global _enhanced_controller
+    _enhanced_controller = EnhancedSACNController()
+    return _enhanced_controller
+
+def get_sacn_receiver() -> Optional['EnhancedSACNController']:
+    """Get the global enhanced sACN controller instance"""
+    return _enhanced_controller
+
+def set_command_callback(callback: Callable):
+    """Set the command callback for the controller"""
+    if _enhanced_controller:
+        _enhanced_controller.command_callback = callback
+
+# For backwards compatibility with enhanced_server.py
+SACN_AVAILABLE = True
+SACNReceiver = EnhancedSACNController  # Alias for compatibility

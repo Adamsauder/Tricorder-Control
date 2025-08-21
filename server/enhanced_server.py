@@ -23,12 +23,6 @@ try:
 except ImportError:
     psutil = None
 
-# Import sACN controller
-from sacn_controller import (
-    SACNReceiver, set_command_callback,
-    initialize_sacn_receiver, get_sacn_receiver, SACN_AVAILABLE
-)
-
 # Flask app setup
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'tricorder_control_secret'
@@ -40,7 +34,7 @@ CONFIG = {
     "web_port": 8080,  # Changed to match web frontend proxy configuration
     "device_timeout": 30,  # seconds
     "command_timeout": 5,  # seconds
-    "sacn_enabled": True,  # Enable sACN integration
+    "sacn_enabled": False,  # Disable sACN integration for basic use
     "sacn_universe": 1,  # Default sACN universe
     "sacn_fps": 30,  # sACN update rate
 }
@@ -66,86 +60,12 @@ def get_server_ip():
     return server_ip or "127.0.0.1"
 
 def auto_configure_tricorder_for_sacn(device_id: str, device_info: dict):
-    """Automatically configure a tricorder for sACN LED control when it connects"""
-    if not SACN_AVAILABLE:
-        return
-        
-    sacn_receiver = get_sacn_receiver()
-    if not sacn_receiver:
-        return
-        
-    # Configure tricorder to respond to RGB channels for 4 total LEDs:
-    # Channels 1-3: Front NeoPixel strip LED #1 (RGB)
-    # Channels 4-6: Front NeoPixel strip LED #2 (RGB) 
-    # Channels 7-9: Front NeoPixel strip LED #3 (RGB)
-    # Channels 10-12: Onboard LED (RGB)
-    try:
-        # Remove any existing configuration
-        sacn_receiver.remove_device(device_id)
-        
-        # Add device with 4 LEDs total (3 NeoPixel strip + 1 onboard)
-        success = sacn_receiver.add_device(
-            device_id=device_id,
-            ip_address=device_info['ip_address'],
-            universe=CONFIG['sacn_universe'],  # Use configured universe
-            start_channel=1,  # Start at channel 1 for first LED
-            num_leds=4,  # 4 total LEDs (3 NeoPixel + 1 onboard)
-            builtin_led_channels=None,  # Onboard LED is now part of the 4-LED array
-            device_type="tricorder"  # Mark as tricorder
-        )
-        
-        if success:
-            print(f"✅ Auto-configured {device_id} for sACN RGB control (4 LEDs: 3 NeoPixel strip + 1 onboard)")
-        else:
-            print(f"⚠️ Failed to auto-configure {device_id} for sACN")
-            
-    except Exception as e:
-        print(f"❌ Error auto-configuring {device_id} for sACN: {e}")
+    """Placeholder for sACN configuration - disabled"""
+    print(f"📡 sACN auto-configuration disabled for {device_id}")
 
 def auto_configure_polyinoculator_for_sacn(device_id: str, device_info: dict):
-    """Automatically configure a polyinoculator for sACN LED control when it connects"""
-    if not SACN_AVAILABLE:
-        return
-        
-    sacn_receiver = get_sacn_receiver()
-    if not sacn_receiver:
-        return
-    
-    # Ensure command callback is set up for sACN processing
-    def sacn_command_callback(device_id: str, action: str, params: dict):
-        command_id = str(uuid.uuid4())
-        send_udp_command_to_device(device_id, action, params, command_id)
-    set_command_callback(sacn_command_callback)
-        
-    # Get device's sACN universe and LED count
-    universe = device_info.get('sacn_universe', 1)
-    num_leds = device_info.get('num_leds', 12)
-    
-    try:
-        # Remove any existing configuration
-        sacn_receiver.remove_device(device_id)
-        
-        # Add polyinoculator device with command-based control like tricorders
-        # Each LED gets 3 channels (RGB), starting from channel 1
-        success = sacn_receiver.add_device(
-            device_id=device_id,
-            ip_address=device_info['ip_address'],
-            universe=universe,
-            start_channel=1,  # Start at channel 1
-            num_leds=num_leds,  # 12 LEDs by default
-            builtin_led_channels=None,  # No built-in LED control
-            device_type="polyinoculator"  # Mark as polyinoculator
-        )
-        
-        if success:
-            print(f"✅ Auto-configured {device_id} for sACN control (universe {universe}, {num_leds} LEDs)")
-        else:
-            print(f"⚠️ Failed to auto-configure {device_id} for sACN")
-            
-    except Exception as e:
-        print(f"❌ Error auto-configuring {device_id} for sACN: {e}")
-    
-    print(f"📡 {device_id} configured for command-based sACN processing on universe {universe}")
+    """Placeholder for sACN configuration - disabled"""  
+    print(f"📡 sACN auto-configuration disabled for {device_id}")
 
 class TricorderServer:
     def __init__(self):
@@ -1144,6 +1064,41 @@ def handle_connect():
 def handle_disconnect():
     """Handle client disconnection"""
     print('Client disconnected')
+
+@socketio.on('send_command')
+def handle_send_command(data):
+    """Handle command from web interface"""
+    try:
+        device_id = data['device_id']
+        action = data['action']
+        parameters = data.get('parameters', {})
+        
+        print(f"🌐 WebSocket command: {action} for {device_id}")
+        
+        if device_id not in devices:
+            print(f"❌ Device {device_id} not found")
+            emit('error', {'message': f'Device {device_id} not found'})
+            return
+        
+        # Send command using existing send_udp_command_to_device function
+        command_id = str(uuid.uuid4())
+        success = send_udp_command_to_device(device_id, action, parameters, command_id)
+        
+        if success:
+            emit('command_sent', {'command_id': command_id})
+            # Broadcast to all clients
+            socketio.emit('device_response', {
+                'device_id': device_id,
+                'command_id': command_id,
+                'action': action,
+                'status': 'sent'
+            })
+        else:
+            emit('error', {'message': f'Failed to send command to {device_id}'})
+            
+    except Exception as e:
+        print(f"WebSocket command error: {e}")
+        emit('error', {'message': str(e)})
 
 def run_udp_server():
     """Run UDP server in background thread"""

@@ -311,6 +311,9 @@
         
         function createDeviceCard(device) {
             const isOnline = device.last_seen && (Date.now() - new Date(device.last_seen).getTime()) < 60000;
+            const isTricorder = device.device_id.startsWith('TRICORDER_') || device.device_id.startsWith('TRIC');
+            
+            console.log(`Creating device card for ${device.device_id}, isTricorder: ${isTricorder}`);
             
             return `
                 <div class="device-card">
@@ -343,6 +346,22 @@
                             <button onclick="playVideo('${device.device_id}', true)">Loop</button>
                             <button class="danger" onclick="sendCommand('${device.device_id}', 'stop_video')">Stop</button>
                         </div>
+                        
+                        ${isTricorder ? `
+                        <div class="image-controls">
+                            <h4 style="margin: 10px 0 5px 0; font-size: 0.9em;">Screen Image Control:</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                <button onclick="displayImage('${device.device_id}', 'greenscreen.jpg')" 
+                                        style="background: #4CAF50; color: white; border: none; padding: 8px; border-radius: 4px;">
+                                    Green Screen
+                                </button>
+                                <button onclick="displayImage('${device.device_id}', 'test.jpg')" 
+                                        style="background: #2196F3; color: white; border: none; padding: 8px; border-radius: 4px;">
+                                    Test Image
+                                </button>
+                            </div>
+                        </div>
+                        ` : ''}
                         
                         <div class="led-controls">
                             <input type="color" id="color-${device.device_id}" class="color-input" value="#ff0000" onchange="updateLEDColor('${device.device_id}')">
@@ -380,6 +399,11 @@
         
         function setLEDColor(deviceId, r, g, b) {
             sendCommand(deviceId, 'set_led_color', { r, g, b });
+        }
+        
+        function displayImage(deviceId, filename) {
+            sendCommand(deviceId, 'display_image', { filename: filename });
+            addLogEntry(deviceId, `Displaying image: ${filename}`);
         }
         
         function updateLEDColor(deviceId) {

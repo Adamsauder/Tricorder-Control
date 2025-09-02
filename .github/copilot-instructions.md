@@ -2,52 +2,112 @@
 
 # Prop Control System - Copilot Instructions
 
-This is a multi-component embedded systems project for controlling ESP32-based film set props.
+Film set prop control system with ESP32 devices, real-time web dashboard, and hybrid UDP/SACN lighting protocol.
 
-## Project Context
+## Architecture Overview
 
-- **Target Hardware**: ESP32 microcontrollers with embedded screens and NeoPixel LEDs
-- **Programming Languages**: Python (server), C++ (ESP32 firmware), JavaScript/TypeScript (web interface)
-- **Key Technologies**: WiFi networking, video playback, LED control, SACN lighting protocol
-- **Priority**: Low-latency command response for film set cuing
+**Three-tier system**: React/TypeScript web dashboard → Flask/SocketIO Python server → ESP32 firmware via UDP (port 8888) + SACN E1.31 (port 5568). Uses SQLite for device persistence, WebSocket for real-time updates, and mDNS for auto-discovery.
 
-## Code Generation Guidelines
+**Prop-Type Grouping**: Server groups devices by type (Tricorders, Polyinoculators, etc.) for unified control. Each prop type gets a single card in the web interface for bulk operations like SACN address changes and firmware updates.
 
-### ESP32 Firmware
-- Use Arduino framework with ESP32 libraries
-- Prioritize performance and memory efficiency
-- Include proper error handling for WiFi and SD card operations
-- Use FreeRTOS tasks for concurrent video/LED operations
+**Device Types**: 
+- **Tricorders**: ESP32 + TFT display + NeoPixels + SD video playback
+- **Polyinoculators**: ESP32-C3 + 3 NeoPixel strips (15 LEDs total)
+- **Defragmentors**: ESP32-C3 + 2 NeoPixels + servo actuator
+- **IV Injectors**: ESP32-C3 + 1 NeoPixel
+- **IV Blood Bag Stations**: ESP32-C3 + 1 NeoPixel *(firmware needed)*
+- **Polyinoculator Cradles**: ESP32-C3 + 1 NeoPixel *(firmware needed)*
 
-### Python Server
-- Use FastAPI or Flask for REST API
-- Implement WebSocket connections for real-time communication
-- Use asyncio for handling multiple device connections
-- Include proper logging and error handling
+All devices support OTA updates and SACN/UDP hybrid control.
 
-### Web Interface
-- Use modern JavaScript frameworks (React/Vue.js recommended)
-- Implement responsive design for mobile/tablet use
-- Include real-time updates via WebSocket
-- Prioritize usability for film set operators
+## Development Workflow
 
-### Networking
-- Use UDP for low-latency commands
-- Implement auto-discovery using mDNS/Bonjour
-- Include connection retry and failover mechanisms
-- Support SACN (E1.31) lighting protocol
+### Quick Start
+```bash
+# VS Code tasks (preferred)
+Ctrl+Shift+P → Tasks: Run Task → "Start Python Server"  # Port 8080
+Ctrl+Shift+P → Tasks: Run Task → "Start Web Development Server"  # Port 3002
 
-## File Organization
-- `/firmware/` - ESP32 Arduino sketches and libraries
-- `/server/` - Python backend server code
-- `/web/` - Frontend web application
-- `/docs/` - Technical documentation and specifications
-- `/hardware/` - Schematics and hardware documentation
+# Manual start  
+python server/enhanced_server.py  # Main server
+cd web && npm run dev           # React dev server
+```
 
-## Performance Requirements
-- Command latency < 50ms
-- Support for 20+ concurrent device connections
-- Efficient video file streaming from SD cards
-- Smooth LED animations and transitions
+### Firmware Development
+```bash
+# PlatformIO (preferred) - use individual project folders
+cd firmware/tricorder/ && pio run -t upload        # ESP32 with display
+cd firmware/polyinoculator/ && pio run -t upload   # ESP32-C3 with 3 LED strips
+cd firmware/defragmentor/ && pio run -t upload     # ESP32-C3 with servo + 2 LEDs  
+cd firmware/iv_injector/ && pio run -t upload      # ESP32-C3 with 1 LED
 
-You can find more info and examples at https://modelcontextprotocol.io/llms-full.txt
+# Or use VS Code tasks
+Ctrl+Shift+P → Tasks: Run Task → "Upload [Device] Firmware"
+
+# Or use VS Code workspace: firmware/tricorder-workspace.code-workspace
+```
+
+### Testing Commands
+```bash
+python test_device_cleanup.py      # Device lifecycle testing  
+python test_sacn_system.py         # SACN/UDP protocol testing
+python server/quick_test.py        # End-to-end system test
+```
+
+## Key Code Patterns
+
+### Server Architecture (Flask + SocketIO)
+- **Main server**: `server/enhanced_server.py` - Flask app with UDP listener thread
+- **SACN integration**: `server/enhanced_sacn_controller.py` - E1.31 protocol handler
+- **Device state**: Global `devices` dict updated via UDP heartbeats, broadcast via SocketIO
+- **Command flow**: Web → Flask endpoint → UDP to device → response via SocketIO
+- **Prop grouping**: Group devices by `device_type` field for bulk operations (SACN addressing, firmware updates)
+
+### Bulk Operations Pattern
+- **SACN address setting**: `/api/props/{prop_type}/sacn/address` - Set universe.address for all online devices of type
+- **Firmware updates**: `/api/props/{prop_type}/firmware/update` - Push .bin file to all devices of type
+- **Group commands**: `/api/props/{prop_type}/command` - Send action to all devices of prop type
+- **Type filtering**: Filter `devices` dict by device type extracted from `device_id` prefix or explicit field
+
+### ESP32 Firmware Patterns
+- **WiFi + UDP setup** in `setup()`: Auto-connect, mDNS registration, UDP port 8888
+- **Main loop**: `handleUDPCommands()` + status broadcasting + WiFi reconnection
+- **Command structure**: JSON via UDP with `action`, `commandId`, device-specific params
+- **Status updates**: Periodic UDP broadcast to server with device state
+
+### Web Interface (React + Material-UI)
+- **Main component**: `TricorderFarmDashboard.tsx` - device grid with real-time updates
+- **Redesign needed**: Group devices into prop-type cards instead of individual device cards
+- **Prop-type cards**: Single card per device type showing aggregate status (online/total count)
+- **Bulk controls**: SACN address input, firmware upload, group commands per prop type
+- **State management**: Custom hook `useTricorderFarm.ts` with WebSocket integration  
+- **Device interaction**: Prop-type selection, bulk operations, individual device drill-down
+- **Real-time updates**: `wsService` handles device_update/command_response events
+
+## Project-Specific Conventions
+
+### Device Communication
+- **UDP commands**: JSON with `action`, `commandId`, parameters. Always include timeout handling.
+- **SACN/UDP hybrid**: SACN for lighting console integration, UDP for direct commands
+- **Device discovery**: mDNS service registration + periodic status broadcasts
+- **OTA updates**: HTTP upload + ArduinoOTA, never requires USB after initial flash
+- **Bulk SACN addressing**: Command format `{"action": "set_sacn_address", "universe": 221, "address": 1}` sent to filtered device list
+- **Group firmware updates**: Iterate through devices of same type, send OTA update sequentially with progress tracking
+
+### File Organization  
+- **Active code**: `/server/enhanced_server.py`, `/web/src/`, `/firmware/{tricorder,polyinoculator,defragmentor,iv_injector}/`
+- **Archived code**: `/archive/` - legacy servers, old firmware, test scripts  
+- **Convenience scripts**: Root-level `.bat`/`.ps1` files for common tasks
+- **New firmware needed**: `/firmware/iv_blood_bag_station/`, `/firmware/polyinoculator_cradle/`
+
+### Hardware-Specific Details
+- **Tricorder**: ESP32-2432S032C-I with ST7789 TFT (320x240), SD card, 12x WS2812B on GPIO2
+- **Polyinoculator**: ESP32-C3 XIAO with 3 LED strips (GPIO10: 7 LEDs, GPIO6: 4 LEDs, GPIO7: 4 LEDs)
+- **Defragmentor**: ESP32-C3 XIAO with 2x RGBW SK6812 LEDs (GPIO4), servo (GPIO10), trigger input (GPIO5)
+- **IV Injector**: ESP32-C3 XIAO with 1x WS2812B LED (GPIO5)
+- **Pin configurations**: Defined in platformio.ini build flags, not in code comments
+
+### Performance Requirements
+- **Command latency**: <50ms via UDP. Use background threads, avoid blocking operations.
+- **SACN processing**: 30fps DMX updates. Cache device mappings, batch LED updates.
+- **Memory management**: ESP32 heap monitoring in firmware, device cleanup in server.

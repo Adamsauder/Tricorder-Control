@@ -109,16 +109,24 @@ class TricorderServer:
             device_id = data.get('deviceId') or data.get('device_id', f'UNKNOWN_{addr[0]}')
             
             # Process messages from ESP32 devices
-            # Accept legacy format (TRICORDER_, POLYINOCULATOR_) and new format (TRIC, POLY)
-            is_tricorder = (device_id.startswith('TRICORDER_') or device_id.startswith('TRIC'))
-            is_polyinoculator = (device_id.startswith('POLYINOCULATOR_') or device_id.startswith('POLY'))
+            # Accept legacy format (TRICORDER_, POLYINOCULATOR_) and new format (TRIC, POLY, DEFRAG, etc.)
+            device_type = None
+            if device_id.startswith('TRICORDER_') or device_id.startswith('TRIC'):
+                device_type = 'tricorder'
+            elif device_id.startswith('POLYINOCULATOR_') or device_id.startswith('POLY'):
+                device_type = 'polyinoculator'
+            elif device_id.startswith('DEFRAGMENTOR_') or device_id.startswith('DEFRAG'):
+                device_type = 'defragmentor'
+            elif device_id.startswith('IV_INJECTOR_') or device_id.startswith('INJECTOR'):
+                device_type = 'iv_injector'
+            elif device_id.startswith('IV_BLOOD_BAG_') or device_id.startswith('BLOOD_BAG'):
+                device_type = 'iv_blood_bag_station'
+            elif device_id.startswith('POLY_CRADLE_') or device_id.startswith('CRADLE'):
+                device_type = 'polyinoculator_cradle'
             
-            if not (is_tricorder or is_polyinoculator):
+            if not device_type:
                 print(f"🚫 Ignoring unsupported device: {device_id} from {addr[0]}")
                 return
-            
-            # Determine device type
-            device_type = 'tricorder' if is_tricorder else 'polyinoculator'
             
             # Update device registry with comprehensive info
             devices[device_id] = {
@@ -152,7 +160,23 @@ class TricorderServer:
                 })
             elif device_type == 'polyinoculator':
                 devices[device_id].update({
-                    'num_leds': data.get('numLeds', 12),
+                    'num_leds': data.get('numLeds', 15),  # Updated for 3-strip configuration
+                    'brightness': data.get('brightness', 128),
+                    'sacn_enabled': data.get('sacnEnabled', True),
+                    'sacn_universe': data.get('sacnUniverse', 1),
+                })
+            elif device_type == 'defragmentor':
+                devices[device_id].update({
+                    'num_leds': data.get('numLeds', 2),  # 2 RGBW LEDs
+                    'servo_position': data.get('servoPosition', 0),
+                    'trigger_state': data.get('triggerState', False),
+                    'power_enabled': data.get('powerEnabled', False),
+                    'sacn_enabled': data.get('sacnEnabled', True),
+                    'sacn_universe': data.get('sacnUniverse', 1),
+                })
+            elif device_type in ['iv_injector', 'iv_blood_bag_station', 'polyinoculator_cradle']:
+                devices[device_id].update({
+                    'num_leds': data.get('numLeds', 1),  # Single LED devices
                     'brightness': data.get('brightness', 128),
                     'sacn_enabled': data.get('sacnEnabled', True),
                     'sacn_universe': data.get('sacnUniverse', 1),
@@ -255,6 +279,67 @@ def device_cleanup_task():
         except Exception as e:
             print(f"❌ Error in device cleanup task: {e}")
             time.sleep(10)  # Wait 10 seconds before retrying
+
+# Prop-type grouping helper functions
+def get_devices_by_type(prop_type: str) -> List[Dict]:
+    """Get all devices of a specific type"""
+    return [device for device in devices.values() if device.get('device_type') == prop_type]
+
+def get_online_devices_by_type(prop_type: str) -> List[Dict]:
+    """Get all online devices of a specific type"""
+    return [device for device in devices.values() 
+            if device.get('device_type') == prop_type and device.get('status') == 'online']
+
+def send_udp_command_to_device(device_id: str, action: str, parameters: dict, command_id: str):
+    """Send UDP command to a specific device"""
+    device = devices.get(device_id)
+    if not device:
+        print(f"❌ Device {device_id} not found")
+        return False
+    
+    try:
+        command = {
+            'action': action,
+            'commandId': command_id,
+            **parameters
+        }
+        
+        message = json.dumps(command)
+        ip_address = device['ip_address']
+        
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_socket.sendto(message.encode(), (ip_address, 8888))
+        udp_socket.close()
+        
+        print(f"✓ Sent command to {device_id}: {action}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to send command to {device_id}: {e}")
+        return False
+
+def send_bulk_command_to_type(prop_type: str, action: str, parameters: dict = None) -> dict:
+    """Send command to all online devices of a specific type"""
+    if parameters is None:
+        parameters = {}
+    
+    online_devices = get_online_devices_by_type(prop_type)
+    if not online_devices:
+        return {'success': False, 'message': f'No online {prop_type} devices found'}
+    
+    command_id = str(uuid.uuid4())
+    results = {'success': True, 'devices_updated': 0, 'total_devices': len(online_devices), 'errors': []}
+    
+    for device in online_devices:
+        device_id = device['device_id']
+        if send_udp_command_to_device(device_id, action, parameters, command_id):
+            results['devices_updated'] += 1
+        else:
+            results['errors'].append(f"Failed to update {device_id}")
+    
+    if results['errors']:
+        results['success'] = results['devices_updated'] > 0  # Partial success if some devices updated
+    
+    return results
 
 @app.route('/')
 def index():
@@ -753,6 +838,153 @@ def restart_device(device_id):
         return jsonify({'error': f'Failed to connect to device: {str(e)}'}), 500
     except Exception as e:
         print(f"Restart error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ==========================================
+# Prop-Type Grouping API Endpoints
+# ==========================================
+
+@app.route('/api/props', methods=['GET'])
+def get_prop_types():
+    """Get summary of all prop types with device counts"""
+    prop_types = {}
+    
+    for device in devices.values():
+        device_type = device.get('device_type', 'unknown')
+        if device_type not in prop_types:
+            prop_types[device_type] = {
+                'type': device_type,
+                'total_devices': 0,
+                'online_devices': 0,
+                'devices': []
+            }
+        
+        prop_types[device_type]['total_devices'] += 1
+        if device.get('status') == 'online':
+            prop_types[device_type]['online_devices'] += 1
+        prop_types[device_type]['devices'].append(device)
+    
+    return jsonify({
+        'prop_types': list(prop_types.values()),
+        'total_types': len(prop_types)
+    })
+
+@app.route('/api/props/<prop_type>', methods=['GET'])
+def get_prop_type_devices(prop_type):
+    """Get all devices of a specific prop type"""
+    devices_of_type = get_devices_by_type(prop_type)
+    online_count = sum(1 for d in devices_of_type if d.get('status') == 'online')
+    
+    return jsonify({
+        'prop_type': prop_type,
+        'total_devices': len(devices_of_type),
+        'online_devices': online_count,
+        'devices': devices_of_type
+    })
+
+@app.route('/api/props/<prop_type>/sacn/address', methods=['POST'])
+def set_prop_type_sacn_address(prop_type):
+    """Set SACN universe and address for all online devices of a prop type"""
+    try:
+        data = request.get_json()
+        universe = data.get('universe')
+        start_address = data.get('address')
+        
+        if universe is None or start_address is None:
+            return jsonify({'error': 'Universe and address are required'}), 400
+        
+        parameters = {
+            'universe': universe,
+            'address': start_address
+        }
+        
+        result = send_bulk_command_to_type(prop_type, 'set_sacn_address', parameters)
+        
+        return jsonify({
+            'success': result['success'],
+            'message': f"SACN address set to {universe}.{start_address} for {prop_type}",
+            'devices_updated': result['devices_updated'],
+            'total_devices': result['total_devices'],
+            'errors': result['errors']
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/props/<prop_type>/firmware/update', methods=['POST'])
+def update_prop_type_firmware(prop_type):
+    """Update firmware for all online devices of a prop type"""
+    try:
+        if 'firmware' not in request.files:
+            return jsonify({'error': 'No firmware file provided'}), 400
+        
+        firmware_file = request.files['firmware']
+        if firmware_file.filename == '':
+            return jsonify({'error': 'No firmware file selected'}), 400
+        
+        # Save firmware file temporarily
+        firmware_content = firmware_file.read()
+        
+        online_devices = get_online_devices_by_type(prop_type)
+        if not online_devices:
+            return jsonify({'error': f'No online {prop_type} devices found'}), 404
+        
+        # Start firmware update process for all devices
+        update_results = []
+        for device in online_devices:
+            device_id = device['device_id']
+            ip_address = device['ip_address']
+            
+            try:
+                # Send firmware to device via HTTP POST (OTA update)
+                url = f"http://{ip_address}/firmware/update"
+                files = {'firmware': (firmware_file.filename, firmware_content, 'application/octet-stream')}
+                
+                response = requests.post(url, files=files, timeout=30)
+                
+                if response.status_code == 200:
+                    update_results.append({'device_id': device_id, 'success': True, 'message': 'Update successful'})
+                else:
+                    update_results.append({'device_id': device_id, 'success': False, 'message': f'HTTP {response.status_code}'})
+                    
+            except Exception as e:
+                update_results.append({'device_id': device_id, 'success': False, 'message': str(e)})
+        
+        successful_updates = sum(1 for r in update_results if r['success'])
+        
+        return jsonify({
+            'success': successful_updates > 0,
+            'message': f"Firmware update completed for {prop_type}",
+            'successful_updates': successful_updates,
+            'total_devices': len(online_devices),
+            'results': update_results
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/props/<prop_type>/command', methods=['POST'])
+def send_prop_type_command(prop_type):
+    """Send a command to all online devices of a prop type"""
+    try:
+        data = request.get_json()
+        action = data.get('action')
+        parameters = data.get('parameters', {})
+        
+        if not action:
+            return jsonify({'error': 'Action is required'}), 400
+        
+        result = send_bulk_command_to_type(prop_type, action, parameters)
+        
+        return jsonify({
+            'success': result['success'],
+            'message': f"Command '{action}' sent to {prop_type} devices",
+            'devices_updated': result['devices_updated'],
+            'total_devices': result['total_devices'],
+            'errors': result['errors']
+        })
+        
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 # ==========================================

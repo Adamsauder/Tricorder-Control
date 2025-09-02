@@ -602,6 +602,37 @@ void processNetworkCommand(String jsonCommand) {
     else if (action == "status") {
       sendStatus(commandId);
     }
+    else if (action == "save_current_as_default") {
+      // Save current LED colors as default startup colors
+      uint8_t red[30], green[30], blue[30];
+      int index = 0;
+      
+      // Copy strip 1 colors
+      for (int i = 0; i < NUM_LEDS_1 && index < 30; i++, index++) {
+        red[index] = leds1[i].r;
+        green[index] = leds1[i].g;
+        blue[index] = leds1[i].b;
+      }
+      
+      // Copy strip 2 colors
+      for (int i = 0; i < NUM_LEDS_2 && index < 30; i++, index++) {
+        red[index] = leds2[i].r;
+        green[index] = leds2[i].g;
+        blue[index] = leds2[i].b;
+      }
+      
+      // Copy strip 3 colors
+      for (int i = 0; i < NUM_LEDS_3 && index < 30; i++, index++) {
+        red[index] = leds3[i].r;
+        green[index] = leds3[i].g;
+        blue[index] = leds3[i].b;
+      }
+      
+      propConfig.setDefaultColors(red, green, blue, index);
+      propConfig.setUseDefaultColors(true);
+      
+      sendResponse(commandId, "Current LED colors saved as default startup colors");
+    }
   }
 }
 
@@ -870,6 +901,32 @@ void loadConfiguration() {
   
   Serial.println("Configuration loaded:");
   propConfig.printConfig();
+  
+  // Apply default colors if enabled
+  if (propConfig.getUseDefaultColors()) {
+    uint8_t red[30], green[30], blue[30];
+    if (propConfig.getDefaultColors(red, green, blue, 30)) {
+      int index = 0;
+      
+      // Apply to strip 1
+      for (int i = 0; i < NUM_LEDS_1 && index < 30; i++, index++) {
+        leds1[i] = CRGB(red[index], green[index], blue[index]);
+      }
+      
+      // Apply to strip 2
+      for (int i = 0; i < NUM_LEDS_2 && index < 30; i++, index++) {
+        leds2[i] = CRGB(red[index], green[index], blue[index]);
+      }
+      
+      // Apply to strip 3
+      for (int i = 0; i < NUM_LEDS_3 && index < 30; i++, index++) {
+        leds3[i] = CRGB(red[index], green[index], blue[index]);
+      }
+      
+      FastLED.show();
+      Serial.println("Applied default LED colors from configuration");
+    }
+  }
 }
 
 void setupWebServer() {

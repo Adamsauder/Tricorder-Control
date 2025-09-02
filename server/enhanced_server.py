@@ -12,6 +12,7 @@ import uuid
 import threading
 import ipaddress
 import requests
+import os
 from datetime import datetime
 from typing import Dict, List, Optional
 from flask import Flask, render_template, request, jsonify, send_file, abort
@@ -23,8 +24,15 @@ try:
 except ImportError:
     psutil = None
 
+# sACN availability check
+SACN_AVAILABLE = False  # sACN disabled for this configuration
+
+def get_sacn_receiver():
+    """Get the global sACN receiver instance"""
+    return getattr(app, 'sacn_receiver', None)
+
 # Flask app setup
-app = Flask(__name__)
+app = Flask(__name__, static_folder='../web/dist', static_url_path='/static')
 app.config['SECRET_KEY'] = 'tricorder_control_secret'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
@@ -307,6 +315,8 @@ def send_udp_command_to_device(device_id: str, action: str, parameters: dict, co
         message = json.dumps(command)
         ip_address = device['ip_address']
         
+        print(f"📤 UDP Command to {device_id}: {message}")
+        
         udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_socket.sendto(message.encode(), (ip_address, 8888))
         udp_socket.close()
@@ -345,11 +355,81 @@ def send_bulk_command_to_type(prop_type: str, action: str, parameters: dict = No
 def index():
     """Main web interface - serve enhanced dashboard"""
     try:
-        with open('web/enhanced-prop-dashboard.html', 'r', encoding='utf-8') as f:
+        index_path = os.path.join(os.getcwd(), 'web', 'dist', 'index.html')
+        with open(index_path, 'r', encoding='utf-8') as f:
             return f.read()
     except FileNotFoundError:
-        # Fallback to basic interface if enhanced dashboard not found
-        return basic_interface()
+        # Fallback to older enhanced dashboard if React build not found
+        try:
+            fallback_path = os.path.join(os.getcwd(), 'web', 'enhanced-prop-dashboard.html')
+            with open(fallback_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except FileNotFoundError:
+            # Fallback to basic interface if enhanced dashboard not found
+            return basic_interface()
+
+@app.route('/assets/<path:filename>')
+def serve_assets(filename):
+    """Serve static assets from web/dist/assets"""
+    try:
+        asset_path = os.path.join(os.getcwd(), 'web', 'dist', 'assets', filename)
+        return send_file(asset_path)
+    except (FileNotFoundError, IsADirectoryError):
+        abort(404)
+
+@app.route('/registerSW.js')
+def serve_register_sw():
+    """Serve service worker registration"""
+    try:
+        sw_path = os.path.join(os.getcwd(), 'web', 'dist', 'registerSW.js')
+        return send_file(sw_path)
+    except FileNotFoundError:
+        abort(404)
+
+@app.route('/manifest.webmanifest')
+def serve_manifest():
+    """Serve web app manifest"""
+    try:
+        manifest_path = os.path.join(os.getcwd(), 'web', 'dist', 'manifest.webmanifest')
+        return send_file(manifest_path)
+    except FileNotFoundError:
+        abort(404)
+
+@app.route('/vite.svg')
+def serve_vite_svg():
+    """Serve vite icon"""
+    try:
+        icon_path = os.path.join(os.getcwd(), 'web', 'dist', 'vite.svg')
+        return send_file(icon_path)
+    except FileNotFoundError:
+        abort(404)
+
+@app.route('/sw.js')
+def serve_sw():
+    """Serve service worker"""
+    try:
+        sw_path = os.path.join(os.getcwd(), 'web', 'dist', 'sw.js')
+        return send_file(sw_path)
+    except FileNotFoundError:
+        abort(404)
+
+@app.route('/workbox-<filename>')
+def serve_workbox(filename):
+    """Serve workbox files"""
+    try:
+        workbox_path = os.path.join(os.getcwd(), 'web', 'dist', f'workbox-{filename}')
+        return send_file(workbox_path)
+    except FileNotFoundError:
+        abort(404)
+
+@app.route('/pwa-192x192.png')
+def serve_pwa_icon():
+    """Serve PWA icon"""
+    try:
+        icon_path = os.path.join(os.getcwd(), 'web', 'dist', 'pwa-192x192.png')
+        return send_file(icon_path)
+    except FileNotFoundError:
+        abort(404)
 
 def basic_interface():
     """Fallback basic interface"""
@@ -533,6 +613,7 @@ def send_udp_command_to_device(device_id: str, action: str, parameters: dict, co
     try:
         # Send UDP command
         command_json = json.dumps(esp32_command)
+        print(f"📤 UDP Command JSON to {device_id}: {command_json}")
         if server.udp_socket:
             server.udp_socket.sendto(
                 command_json.encode('utf-8'),
@@ -887,25 +968,39 @@ def set_prop_type_sacn_address(prop_type):
     """Set SACN universe and address for all online devices of a prop type"""
     try:
         data = request.get_json()
+        print(f"🔧 Received SACN address request for {prop_type}")
+        print(f"📤 Raw request data: {data}")
+        
         universe = data.get('universe')
         start_address = data.get('address')
+        
+        print(f"📊 Parsed values: universe={universe}, start_address={start_address}")
         
         if universe is None or start_address is None:
             return jsonify({'error': 'Universe and address are required'}), 400
         
-        parameters = {
-            'universe': universe,
-            'address': start_address
-        }
+        # Send universe command first
+        universe_parameters = {'universe': universe}
+        print(f"🚀 Sending universe command with parameters: {universe_parameters}")
+        universe_result = send_bulk_command_to_type(prop_type, 'set_sacn_universe', universe_parameters)
         
-        result = send_bulk_command_to_type(prop_type, 'set_sacn_address', parameters)
+        # Send address command second
+        address_parameters = {'address': start_address}
+        print(f"🚀 Sending address command with parameters: {address_parameters}")
+        address_result = send_bulk_command_to_type(prop_type, 'set_sacn_address', address_parameters)
+        
+        # Combine results
+        total_success = universe_result['success'] and address_result['success']
+        combined_errors = universe_result['errors'] + address_result['errors']
         
         return jsonify({
-            'success': result['success'],
+            'success': total_success,
             'message': f"SACN address set to {universe}.{start_address} for {prop_type}",
-            'devices_updated': result['devices_updated'],
-            'total_devices': result['total_devices'],
-            'errors': result['errors']
+            'devices_updated': address_result['devices_updated'],  # Use address result for final count
+            'total_devices': address_result['total_devices'],
+            'errors': combined_errors,
+            'universe_result': universe_result,
+            'address_result': address_result
         })
         
     except Exception as e:
@@ -982,6 +1077,150 @@ def send_prop_type_command(prop_type):
             'devices_updated': result['devices_updated'],
             'total_devices': result['total_devices'],
             'errors': result['errors']
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/props/<prop_type>/save-current-as-default', methods=['POST'])
+def save_current_as_default(prop_type):
+    """Save current SACN LED state as default for all online devices of a prop type"""
+    try:
+        result = send_bulk_command_to_type(prop_type, 'save_current_as_default', {})
+        
+        return jsonify({
+            'success': result['success'],
+            'message': f"Saved current LED state as default for {prop_type} devices",
+            'devices_updated': result['devices_updated'],
+            'total_devices': result['total_devices'],
+            'errors': result['errors']
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ==========================================
+# Firmware Management API Endpoints
+# ==========================================
+
+@app.route('/api/firmware/list', methods=['GET'])
+def list_firmware():
+    """List available firmware files"""
+    try:
+        firmware_dir = os.path.join(os.path.dirname(__file__), 'firmware_binaries')
+        if not os.path.exists(firmware_dir):
+            return jsonify({'firmware': []})
+        
+        firmware_files = []
+        for filename in os.listdir(firmware_dir):
+            if filename.endswith('.bin'):
+                filepath = os.path.join(firmware_dir, filename)
+                stat = os.stat(filepath)
+                
+                # Extract device type from filename
+                device_type = filename.replace('_firmware.bin', '')
+                
+                firmware_files.append({
+                    'device_type': device_type,
+                    'filename': filename,
+                    'size': stat.st_size,
+                    'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    'download_url': f'/api/firmware/download/{device_type}'
+                })
+        
+        return jsonify({'firmware': firmware_files})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/firmware/download/<device_type>', methods=['GET'])
+def download_firmware(device_type):
+    """Download firmware file for a specific device type"""
+    try:
+        firmware_dir = os.path.join(os.path.dirname(__file__), 'firmware_binaries')
+        filename = f"{device_type}_firmware.bin"
+        filepath = os.path.join(firmware_dir, filename)
+        
+        if not os.path.exists(filepath):
+            return jsonify({'error': f'Firmware not found for {device_type}'}), 404
+        
+        return send_file(filepath, 
+                        as_attachment=True, 
+                        download_name=filename,
+                        mimetype='application/octet-stream')
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/props/<prop_type>/firmware/update', methods=['POST'])
+def update_prop_firmware(prop_type):
+    """Update firmware for all online devices of a prop type"""
+    try:
+        # Check if firmware file exists
+        firmware_dir = os.path.join(os.path.dirname(__file__), 'firmware_binaries')
+        filename = f"{prop_type}_firmware.bin"
+        filepath = os.path.join(firmware_dir, filename)
+        
+        if not os.path.exists(filepath):
+            return jsonify({'error': f'Firmware not found for {prop_type}'}), 404
+        
+        # Get all online devices of this type
+        online_devices = [
+            device for device in devices.values()
+            if device.get('online', False) and device.get('type') == prop_type
+        ]
+        
+        if not online_devices:
+            return jsonify({
+                'success': False,
+                'message': f'No online {prop_type} devices found',
+                'devices_updated': 0,
+                'total_devices': 0,
+                'errors': []
+            })
+        
+        # Read firmware file
+        with open(filepath, 'rb') as f:
+            firmware_data = f.read()
+        
+        # Send OTA update command to each device
+        results = []
+        errors = []
+        
+        for device in online_devices:
+            device_id = device['deviceId']
+            ip_address = device['ipAddress']
+            
+            try:
+                # Create OTA update command
+                command = {
+                    'action': 'ota_update',
+                    'commandId': str(uuid.uuid4()),
+                    'timestamp': datetime.now().isoformat(),
+                    'firmware_size': len(firmware_data),
+                    'firmware_url': f'http://{get_server_ip()}:8080/api/firmware/download/{prop_type}'
+                }
+                
+                # Send UDP command
+                if send_udp_command_to_device(device_id, 'ota_update', 
+                                            {'firmware_url': f'http://{get_server_ip()}:8080/api/firmware/download/{prop_type}',
+                                             'firmware_size': len(firmware_data)}, 
+                                            command['commandId']):
+                    results.append(device_id)
+                    print(f"✓ OTA update initiated for {device_id}")
+                else:
+                    errors.append(f"Failed to send OTA command to {device_id}")
+                    
+            except Exception as e:
+                errors.append(f"Error updating {device_id}: {str(e)}")
+        
+        return jsonify({
+            'success': len(results) > 0,
+            'message': f"OTA update initiated for {len(results)} {prop_type} devices",
+            'devices_updated': len(results),
+            'total_devices': len(online_devices),
+            'updated_devices': results,
+            'errors': errors
         })
         
     except Exception as e:

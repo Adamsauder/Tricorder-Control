@@ -42,6 +42,14 @@ void TricorderConfig::setDefaults() {
   // LED settings
   config.brightness = 128;
   
+  // Set default colors to off (black)
+  for (int i = 0; i < 12; i++) {
+    config.defaultColorR[i] = 0;
+    config.defaultColorG[i] = 0;
+    config.defaultColorB[i] = 0;
+  }
+  config.useDefaultColors = false;
+  
   // Network settings
   strcpy(config.wifiSSID, "Rigging Electric");
   strcpy(config.wifiPassword, "academy123");
@@ -163,6 +171,30 @@ void TricorderConfig::setBrightness(uint8_t brightness) {
 
 uint8_t TricorderConfig::getBrightness() const {
   return config.brightness;
+}
+
+void TricorderConfig::setDefaultColors(const uint8_t* red, const uint8_t* green, const uint8_t* blue) {
+  for (int i = 0; i < 12; i++) {
+    config.defaultColorR[i] = red[i];
+    config.defaultColorG[i] = green[i];
+    config.defaultColorB[i] = blue[i];
+  }
+}
+
+void TricorderConfig::getDefaultColors(uint8_t* red, uint8_t* green, uint8_t* blue) const {
+  for (int i = 0; i < 12; i++) {
+    red[i] = config.defaultColorR[i];
+    green[i] = config.defaultColorG[i];
+    blue[i] = config.defaultColorB[i];
+  }
+}
+
+void TricorderConfig::setUseDefaultColors(bool use) {
+  config.useDefaultColors = use;
+}
+
+bool TricorderConfig::getUseDefaultColors() const {
+  return config.useDefaultColors;
 }
 
 // Network settings

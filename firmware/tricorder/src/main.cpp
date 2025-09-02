@@ -449,14 +449,7 @@ void setup() {
     Serial.println("✓ All dual-core tasks created successfully!");
     setBuiltinLED(0, 255, 0); // Green success indication
     
-    // Startup LED effect via task
-    LEDCommand startupEffect;
-    startupEffect.type = LEDCommand::SCANNER_EFFECT;
-    startupEffect.r = 0;
-    startupEffect.g = 255;
-    startupEffect.b = 0;
-    startupEffect.delayMs = 150;
-    xQueueSend(ledCommandQueue, &startupEffect, 0);
+    // No startup animation - default colors will be applied after configuration loads
   } else {
     Serial.println("✗ Failed to create some tasks!");
     setBuiltinLED(255, 255, 0); // Yellow warning indication
@@ -479,6 +472,18 @@ void setup() {
     // Apply configuration settings
     ledBrightness = tricorderConfig.getBrightness();
     FastLED.setBrightness(ledBrightness);
+    
+    // Apply default colors if enabled
+    if (tricorderConfig.getUseDefaultColors()) {
+      uint8_t red[NUM_NEOPIXELS], green[NUM_NEOPIXELS], blue[NUM_NEOPIXELS];
+      tricorderConfig.getDefaultColors(red, green, blue);
+      
+      for (int i = 0; i < NUM_NEOPIXELS; i++) {
+        leds[i] = CRGB(red[i], green[i], blue[i]);
+      }
+      FastLED.show();
+      Serial.println("Applied default LED colors from configuration");
+    }
     
     // Update display brightness
     uint8_t displayBrightness = tricorderConfig.getDisplayBrightness();
@@ -1307,7 +1312,12 @@ void processNetworkCommand(String jsonCommand) {
       sendResponse(commandId, "sACN disabled");
     }
     else if (action == "set_sacn_universe") {
-      int universe = doc["universe"];
+      int universe = 1;
+      if (doc.containsKey("parameters") && doc["parameters"].containsKey("universe")) {
+        universe = doc["parameters"]["universe"];
+      } else if (doc.containsKey("universe")) {
+        universe = doc["universe"];
+      }
       sacnUniverse = universe;
       tricorderConfig.setSacnUniverse(universe);
       tricorderConfig.save();
@@ -1320,7 +1330,12 @@ void processNetworkCommand(String jsonCommand) {
       sendResponse(commandId, "sACN universe set to " + String(universe));
     }
     else if (action == "set_sacn_address") {
-      int address = doc["address"];
+      int address = 0;
+      if (doc.containsKey("parameters") && doc["parameters"].containsKey("address")) {
+        address = doc["parameters"]["address"];
+      } else if (doc.containsKey("address")) {
+        address = doc["address"];
+      }
       sacnStartAddress = address;
       tricorderConfig.setDmxAddress(address);
       tricorderConfig.save();
@@ -1344,6 +1359,22 @@ void processNetworkCommand(String jsonCommand) {
       udp.beginPacket(udp.remoteIP(), udp.remotePort());
       udp.print(response);
       udp.endPacket();
+    }
+    else if (action == "save_current_as_default") {
+      // Save current LED colors as default startup colors
+      uint8_t red[NUM_NEOPIXELS], green[NUM_NEOPIXELS], blue[NUM_NEOPIXELS];
+      
+      for (int i = 0; i < NUM_NEOPIXELS; i++) {
+        red[i] = leds[i].r;
+        green[i] = leds[i].g;
+        blue[i] = leds[i].b;
+      }
+      
+      tricorderConfig.setDefaultColors(red, green, blue);
+      tricorderConfig.setUseDefaultColors(true);
+      tricorderConfig.save();
+      
+      sendResponse(commandId, "Current LED colors saved as default startup colors");
     }
   }
 }

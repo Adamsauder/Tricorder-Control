@@ -16,6 +16,10 @@ const char* PropConfig::KEY_WIFI_SSID = "wifi_ssid";
 const char* PropConfig::KEY_WIFI_PASSWORD = "wifi_pass";
 const char* PropConfig::KEY_FIRST_BOOT = "first_boot";
 const char* PropConfig::KEY_FIXTURE_NUMBER = "fixture_num";
+const char* PropConfig::KEY_DEFAULT_COLORS_R = "def_colors_r";
+const char* PropConfig::KEY_DEFAULT_COLORS_G = "def_colors_g";
+const char* PropConfig::KEY_DEFAULT_COLORS_B = "def_colors_b";
+const char* PropConfig::KEY_USE_DEFAULT_COLORS = "use_def_colors";
 
 PropConfig::PropConfig() {
 }
@@ -45,6 +49,22 @@ bool PropConfig::loadConfig(Config& config) {
     config.firstBoot = prefs.getBool(KEY_FIRST_BOOT, true);
     config.fixtureNumber = prefs.getInt(KEY_FIXTURE_NUMBER, 1);
     
+    // Load default colors (initialize to black if not set)
+    size_t redSize = prefs.getBytesLength(KEY_DEFAULT_COLORS_R);
+    if (redSize == 30) {
+        prefs.getBytes(KEY_DEFAULT_COLORS_R, config.defaultColorsR, 30);
+        prefs.getBytes(KEY_DEFAULT_COLORS_G, config.defaultColorsG, 30);
+        prefs.getBytes(KEY_DEFAULT_COLORS_B, config.defaultColorsB, 30);
+    } else {
+        // Initialize to black
+        for (int i = 0; i < 30; i++) {
+            config.defaultColorsR[i] = 0;
+            config.defaultColorsG[i] = 0;
+            config.defaultColorsB[i] = 0;
+        }
+    }
+    config.useDefaultColors = prefs.getBool(KEY_USE_DEFAULT_COLORS, false);
+    
     prefs.end();
     return true;
 }
@@ -65,6 +85,10 @@ bool PropConfig::saveConfig(const Config& config) {
     success &= prefs.putString(KEY_WIFI_PASSWORD, config.wifiPassword);
     success &= prefs.putBool(KEY_FIRST_BOOT, config.firstBoot);
     success &= prefs.putInt(KEY_FIXTURE_NUMBER, config.fixtureNumber);
+    success &= prefs.putBytes(KEY_DEFAULT_COLORS_R, config.defaultColorsR, 30);
+    success &= prefs.putBytes(KEY_DEFAULT_COLORS_G, config.defaultColorsG, 30);
+    success &= prefs.putBytes(KEY_DEFAULT_COLORS_B, config.defaultColorsB, 30);
+    success &= prefs.putBool(KEY_USE_DEFAULT_COLORS, config.useDefaultColors);
     
     prefs.end();
     return success;
@@ -172,6 +196,71 @@ bool PropConfig::setBrightness(int brightness) {
     bool success = prefs.putInt(KEY_BRIGHTNESS, brightness);
     prefs.end();
     return success;
+}
+
+bool PropConfig::setDefaultColors(const uint8_t* red, const uint8_t* green, const uint8_t* blue, int numLeds) {
+    if (numLeds > 30) numLeds = 30;  // Limit to array size
+    if (!prefs.begin(NAMESPACE, false)) return false;
+    
+    uint8_t redData[30] = {0};
+    uint8_t greenData[30] = {0};
+    uint8_t blueData[30] = {0};
+    
+    for (int i = 0; i < numLeds; i++) {
+        redData[i] = red[i];
+        greenData[i] = green[i];
+        blueData[i] = blue[i];
+    }
+    
+    bool success = true;
+    success &= prefs.putBytes(KEY_DEFAULT_COLORS_R, redData, 30);
+    success &= prefs.putBytes(KEY_DEFAULT_COLORS_G, greenData, 30);
+    success &= prefs.putBytes(KEY_DEFAULT_COLORS_B, blueData, 30);
+    
+    prefs.end();
+    return success;
+}
+
+bool PropConfig::getDefaultColors(uint8_t* red, uint8_t* green, uint8_t* blue, int maxLeds) {
+    if (maxLeds > 30) maxLeds = 30;  // Limit to array size
+    if (!prefs.begin(NAMESPACE, true)) return false;
+    
+    uint8_t redData[30];
+    uint8_t greenData[30];
+    uint8_t blueData[30];
+    
+    size_t redSize = prefs.getBytesLength(KEY_DEFAULT_COLORS_R);
+    if (redSize != 30) {
+        prefs.end();
+        return false;
+    }
+    
+    prefs.getBytes(KEY_DEFAULT_COLORS_R, redData, 30);
+    prefs.getBytes(KEY_DEFAULT_COLORS_G, greenData, 30);
+    prefs.getBytes(KEY_DEFAULT_COLORS_B, blueData, 30);
+    
+    for (int i = 0; i < maxLeds; i++) {
+        red[i] = redData[i];
+        green[i] = greenData[i];
+        blue[i] = blueData[i];
+    }
+    
+    prefs.end();
+    return true;
+}
+
+bool PropConfig::setUseDefaultColors(bool use) {
+    if (!prefs.begin(NAMESPACE, false)) return false;
+    bool success = prefs.putBool(KEY_USE_DEFAULT_COLORS, use);
+    prefs.end();
+    return success;
+}
+
+bool PropConfig::getUseDefaultColors() {
+    if (!prefs.begin(NAMESPACE, true)) return false;
+    bool value = prefs.getBool(KEY_USE_DEFAULT_COLORS, false);
+    prefs.end();
+    return value;
 }
 
 String PropConfig::getWiFiSSID() {

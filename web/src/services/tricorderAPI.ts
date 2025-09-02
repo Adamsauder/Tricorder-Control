@@ -89,6 +89,18 @@ export interface VideoParameters {
   loop?: boolean;
 }
 
+export interface FirmwareInfo {
+  device_type: string;
+  filename: string;
+  size: number;
+  modified: string;
+  download_url: string;
+}
+
+export interface FirmwareListResponse {
+  firmware: FirmwareInfo[];
+}
+
 // WebSocket connection
 class WebSocketService {
   private socket: Socket | null = null;
@@ -382,6 +394,29 @@ export const tricorderAPI = {
     return this.sendBulkCommand(deviceIds, {
       action: 'stop_video',
     });
+  },
+
+  // Firmware management
+  async getFirmwareList(): Promise<FirmwareListResponse> {
+    try {
+      const response = await api.get('/firmware/list');
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching firmware list:', error);
+      throw error;
+    }
+  },
+
+  async downloadFirmware(deviceType: string): Promise<Blob> {
+    try {
+      const response = await api.get(`/firmware/download/${deviceType}`, {
+        responseType: 'blob',
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error downloading firmware:', error);
+      throw error;
+    }
   },
 };
 

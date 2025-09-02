@@ -25,6 +25,10 @@ private:
     static const char* KEY_WIFI_PASSWORD;
     static const char* KEY_FIRST_BOOT;
     static const char* KEY_FIXTURE_NUMBER;
+    static const char* KEY_DEFAULT_COLORS_R;
+    static const char* KEY_DEFAULT_COLORS_G;
+    static const char* KEY_DEFAULT_COLORS_B;
+    static const char* KEY_USE_DEFAULT_COLORS;
 
 public:
     struct Config {
@@ -38,6 +42,10 @@ public:
         String wifiPassword;
         bool firstBoot;
         int fixtureNumber;
+        uint8_t defaultColorsR[30];  // Default red values for all LEDs
+        uint8_t defaultColorsG[30];  // Default green values for all LEDs
+        uint8_t defaultColorsB[30];  // Default blue values for all LEDs
+        bool useDefaultColors;       // Whether to use default colors on startup
     };
 
     PropConfig();
@@ -67,6 +75,12 @@ public:
     
     int getBrightness();
     bool setBrightness(int brightness);
+    
+    // Default LED colors
+    bool setDefaultColors(const uint8_t* red, const uint8_t* green, const uint8_t* blue, int numLeds);
+    bool getDefaultColors(uint8_t* red, uint8_t* green, uint8_t* blue, int maxLeds);
+    bool setUseDefaultColors(bool use);
+    bool getUseDefaultColors();
     
     // WiFi credentials
     String getWiFiSSID();

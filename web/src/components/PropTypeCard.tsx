@@ -34,8 +34,9 @@ import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
   Palette as PaletteIcon,
+  Save as SaveIcon,
 } from '@mui/icons-material';
-import { TricorderDevice } from '../services/tricorderAPI';
+import { TricorderDevice, tricorderAPI, FirmwareInfo } from '../services/tricorderAPI';
 
 interface PropTypeCardProps {
   propType: string;
@@ -43,6 +44,7 @@ interface PropTypeCardProps {
   onSacnAddressChange: (propType: string, universe: number, address: number) => Promise<void>;
   onFirmwareUpdate: (propType: string, file: File) => Promise<void>;
   onBulkCommand: (propType: string, action: string, parameters?: any) => Promise<void>;
+  onSaveCurrentAsDefault: (propType: string) => Promise<void>;
 }
 
 const PropTypeCard: React.FC<PropTypeCardProps> = ({
@@ -51,6 +53,7 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
   onSacnAddressChange,
   onFirmwareUpdate,
   onBulkCommand,
+  onSaveCurrentAsDefault,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [sacnDialogOpen, setSacnDialogOpen] = useState(false);
@@ -58,6 +61,10 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
   const [universe, setUniverse] = useState(221);
   const [address, setAddress] = useState(1);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [availableFirmware, setAvailableFirmware] = useState<FirmwareInfo[]>([]);
+  const [selectedFirmwareType, setSelectedFirmwareType] = useState<'server' | 'custom'>('server');
+  const [selectedServerFirmware, setSelectedServerFirmware] = useState<string>('');
+  const [loadingFirmware, setLoadingFirmware] = useState(false);
 
   const onlineDevices = devices.filter(d => d.status === 'online');
   const offlineDevices = devices.filter(d => d.status !== 'online');
@@ -104,22 +111,67 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
     }
   };
 
-  const handleFirmwareSubmit = async () => {
-    if (!selectedFile) return;
-    
-    try {
-      await onFirmwareUpdate(propType, selectedFile);
-      setFirmwareDialogOpen(false);
-      setSelectedFile(null);
-    } catch (error) {
-      console.error('Firmware update failed:', error);
-    }
-  };
-
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       setSelectedFile(file);
+    }
+  };
+
+  const fetchAvailableFirmware = async () => {
+    setLoadingFirmware(true);
+    try {
+      const response = await tricorderAPI.getFirmwareList();
+      setAvailableFirmware(response.firmware);
+      
+      // Pre-select the firmware for the current prop type if available
+      const matchingFirmware = response.firmware.find(fw => fw.device_type === propType);
+      if (matchingFirmware) {
+        setSelectedServerFirmware(matchingFirmware.device_type);
+        setSelectedFirmwareType('server');
+      } else {
+        setSelectedFirmwareType('custom');
+      }
+    } catch (error) {
+      console.error('Failed to fetch firmware list:', error);
+      setSelectedFirmwareType('custom'); // Fallback to custom upload
+    } finally {
+      setLoadingFirmware(false);
+    }
+  };
+
+  const openFirmwareDialog = () => {
+    setFirmwareDialogOpen(true);
+    fetchAvailableFirmware();
+  };
+
+  const handleFirmwareSubmit = async () => {
+    let fileToUpload: File | null = null;
+
+    if (selectedFirmwareType === 'server' && selectedServerFirmware) {
+      // Download firmware from server and convert to File
+      try {
+        const blob = await tricorderAPI.downloadFirmware(selectedServerFirmware);
+        const firmwareInfo = availableFirmware.find(fw => fw.device_type === selectedServerFirmware);
+        const filename = firmwareInfo?.filename || `${selectedServerFirmware}_firmware.bin`;
+        fileToUpload = new File([blob], filename, { type: 'application/octet-stream' });
+      } catch (error) {
+        console.error('Failed to download server firmware:', error);
+        return;
+      }
+    } else if (selectedFirmwareType === 'custom' && selectedFile) {
+      fileToUpload = selectedFile;
+    }
+
+    if (!fileToUpload) return;
+    
+    try {
+      await onFirmwareUpdate(propType, fileToUpload);
+      setFirmwareDialogOpen(false);
+      setSelectedFile(null);
+      setSelectedServerFirmware('');
+    } catch (error) {
+      console.error('Firmware update failed:', error);
     }
   };
 
@@ -182,7 +234,7 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
               variant="contained"
               color="info"
               startIcon={<UpdateIcon />}
-              onClick={() => setFirmwareDialogOpen(true)}
+              onClick={openFirmwareDialog}
               disabled={onlineDevices.length === 0}
             >
               Update Firmware
@@ -195,6 +247,16 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
               disabled={onlineDevices.length === 0}
             >
               Ping All
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="success"
+              startIcon={<SaveIcon />}
+              onClick={() => onSaveCurrentAsDefault(propType)}
+              disabled={onlineDevices.length === 0}
+            >
+              Save Current as Default
             </Button>
           </Box>
         </CardContent>
@@ -277,24 +339,120 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
       </Dialog>
 
       {/* Firmware Update Dialog */}
-      <Dialog open={firmwareDialogOpen} onClose={() => setFirmwareDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={firmwareDialogOpen} onClose={() => setFirmwareDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Update Firmware for {getDeviceTypeDisplayName(propType)}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" gutterBottom>
-            Upload a .bin firmware file to update all {onlineDevices.length} online {propType} devices.
+            Select firmware to update all {onlineDevices.length} online {propType} devices.
           </Typography>
-          <Box mt={2}>
-            <input
-              type="file"
-              accept=".bin"
-              onChange={handleFileChange}
-              style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '4px' }}
-            />
-            {selectedFile && (
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                Selected: {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
+          
+          <Box mt={3}>
+            <FormControl component="fieldset">
+              <Typography variant="subtitle2" gutterBottom>
+                Firmware Source
               </Typography>
-            )}
+              
+              {/* Server Firmware Selection */}
+              <Box mb={2}>
+                <Button
+                  variant={selectedFirmwareType === 'server' ? 'contained' : 'outlined'}
+                  onClick={() => setSelectedFirmwareType('server')}
+                  disabled={loadingFirmware || availableFirmware.length === 0}
+                  sx={{ mr: 2, mb: 1 }}
+                >
+                  📦 Server Firmware
+                </Button>
+                <Button
+                  variant={selectedFirmwareType === 'custom' ? 'contained' : 'outlined'}
+                  onClick={() => setSelectedFirmwareType('custom')}
+                  sx={{ mb: 1 }}
+                >
+                  📁 Custom File
+                </Button>
+              </Box>
+
+              {/* Server Firmware Options */}
+              {selectedFirmwareType === 'server' && (
+                <Box mb={2}>
+                  {loadingFirmware ? (
+                    <Typography variant="body2" color="text.secondary">
+                      Loading firmware list...
+                    </Typography>
+                  ) : availableFirmware.length > 0 ? (
+                    <FormControl fullWidth>
+                      <InputLabel>Available Server Firmware</InputLabel>
+                      <Select
+                        value={selectedServerFirmware}
+                        onChange={(e) => setSelectedServerFirmware(e.target.value)}
+                        label="Available Server Firmware"
+                      >
+                        {availableFirmware.map((fw) => (
+                          <MenuItem key={fw.device_type} value={fw.device_type}>
+                            <Box>
+                              <Typography variant="body2">
+                                {fw.device_type} - {fw.filename}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {(fw.size / 1024 / 1024).toFixed(2)} MB • Modified: {new Date(fw.modified).toLocaleDateString()}
+                              </Typography>
+                            </Box>
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  ) : (
+                    <Typography variant="body2" color="warning.main">
+                      No server firmware available. Please use custom file upload.
+                    </Typography>
+                  )}
+                </Box>
+              )}
+
+              {/* Custom File Upload */}
+              {selectedFirmwareType === 'custom' && (
+                <Box mb={2}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Upload Custom Firmware File
+                  </Typography>
+                  <input
+                    type="file"
+                    accept=".bin"
+                    onChange={handleFileChange}
+                    style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '4px' }}
+                  />
+                  {selectedFile && (
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                      Selected: {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
+                    </Typography>
+                  )}
+                </Box>
+              )}
+
+              {/* Firmware Info Display */}
+              {selectedFirmwareType === 'server' && selectedServerFirmware && (
+                <Box p={2} bgcolor="background.paper" border={1} borderColor="divider" borderRadius={1}>
+                  {(() => {
+                    const fw = availableFirmware.find(f => f.device_type === selectedServerFirmware);
+                    return fw ? (
+                      <Box>
+                        <Typography variant="subtitle2" color="primary">
+                          📋 Selected Firmware Details
+                        </Typography>
+                        <Typography variant="body2">
+                          <strong>File:</strong> {fw.filename}
+                        </Typography>
+                        <Typography variant="body2">
+                          <strong>Size:</strong> {(fw.size / 1024 / 1024).toFixed(2)} MB
+                        </Typography>
+                        <Typography variant="body2">
+                          <strong>Last Modified:</strong> {new Date(fw.modified).toLocaleString()}
+                        </Typography>
+                      </Box>
+                    ) : null;
+                  })()}
+                </Box>
+              )}
+            </FormControl>
           </Box>
         </DialogContent>
         <DialogActions>
@@ -302,7 +460,11 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
           <Button 
             onClick={handleFirmwareSubmit} 
             variant="contained" 
-            disabled={!selectedFile}
+            disabled={
+              (selectedFirmwareType === 'server' && !selectedServerFirmware) ||
+              (selectedFirmwareType === 'custom' && !selectedFile) ||
+              loadingFirmware
+            }
           >
             Update All Devices
           </Button>

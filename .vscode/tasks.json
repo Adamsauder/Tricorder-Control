@@ -1,5 +1,13 @@
 {
   "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "comPort",
+      "description": "COM Port (e.g., COM3, COM4)",
+      "default": "COM3",
+      "type": "promptString"
+    }
+  ],
   "tasks": [
     {
       "label": "Install Python Dependencies",
@@ -134,7 +142,7 @@
       "label": "Upload Defragmentor Firmware",
       "type": "shell",
       "command": "pio",
-      "args": ["run", "--target", "upload"],
+      "args": ["run", "--target", "upload", "--upload-port", "${input:comPort}"],
       "options": {
         "cwd": "${workspaceFolder}/firmware/defragmentor"
       },
@@ -205,7 +213,7 @@
       "label": "Upload IV Injector Firmware",
       "type": "shell",
       "command": "pio",
-      "args": ["run", "--target", "upload"],
+      "args": ["run", "--target", "upload", "--upload-port", "${input:comPort}"],
       "options": {
         "cwd": "${workspaceFolder}/firmware/iv_injector"
       },
@@ -276,7 +284,7 @@
       "label": "Upload Polyinoculator Firmware",
       "type": "shell",
       "command": "pio",
-      "args": ["run", "--target", "upload"],
+      "args": ["run", "--target", "upload", "--upload-port", "${input:comPort}"],
       "options": {
         "cwd": "${workspaceFolder}/firmware/polyinoculator"
       },
@@ -347,7 +355,7 @@
       "label": "Upload Tricorder Firmware",
       "type": "shell",
       "command": "pio",
-      "args": ["run", "--target", "upload"],
+      "args": ["run", "--target", "upload", "--upload-port", "${input:comPort}"],
       "options": {
         "cwd": "${workspaceFolder}/firmware/tricorder"
       },

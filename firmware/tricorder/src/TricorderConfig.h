@@ -19,6 +19,10 @@ struct TricorderConfigData {
   
   // LED settings
   uint8_t brightness;
+  uint8_t defaultColorR[12];  // Default red values for each LED
+  uint8_t defaultColorG[12];  // Default green values for each LED
+  uint8_t defaultColorB[12];  // Default blue values for each LED
+  bool useDefaultColors;      // Whether to use default colors on startup
   
   // Network settings
   char wifiSSID[32];
@@ -81,6 +85,10 @@ public:
   // LED settings
   void setBrightness(uint8_t brightness);
   uint8_t getBrightness() const;
+  void setDefaultColors(const uint8_t* red, const uint8_t* green, const uint8_t* blue);
+  void getDefaultColors(uint8_t* red, uint8_t* green, uint8_t* blue) const;
+  void setUseDefaultColors(bool use);
+  bool getUseDefaultColors() const;
   
   // Network settings
   void setWiFiSSID(const char* ssid);

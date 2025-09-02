@@ -4,6 +4,8 @@
 
 Film set prop control system with ESP32 devices, real-time web dashboard, and hybrid UDP/SACN lighting protocol.
 
+**IMPORTANT**: This system runs on Windows with PowerShell as the default shell. When generating terminal commands, always use PowerShell syntax (semicolons `;` for command chaining, not `&&`). Never use bash/Linux syntax.
+
 ## Architecture Overview
 
 **Three-tier system**: React/TypeScript web dashboard → Flask/SocketIO Python server → ESP32 firmware via UDP (port 8888) + SACN E1.31 (port 5568). Uses SQLite for device persistence, WebSocket for real-time updates, and mDNS for auto-discovery.

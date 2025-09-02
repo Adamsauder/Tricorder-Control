@@ -16,6 +16,10 @@ const char* PropConfig::KEY_WIFI_SSID = "wifi_ssid";
 const char* PropConfig::KEY_WIFI_PASSWORD = "wifi_pass";
 const char* PropConfig::KEY_FIRST_BOOT = "first_boot";
 const char* PropConfig::KEY_FIXTURE_NUMBER = "fixture_num";
+const char* PropConfig::KEY_DEFAULT_COLORS_R = "def_colors_r";
+const char* PropConfig::KEY_DEFAULT_COLORS_G = "def_colors_g";
+const char* PropConfig::KEY_DEFAULT_COLORS_B = "def_colors_b";
+const char* PropConfig::KEY_USE_DEFAULT_COLORS = "use_def_colors";
 
 PropConfig::PropConfig() {
 }

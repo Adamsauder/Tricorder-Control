@@ -8,7 +8,7 @@ echo Make sure your ESP32-2432S032C-I is connected via USB-C
 echo.
 pause
 
-cd /d "C:\Tricorder Control\Tricorder-Control\firmware\tricorder"
+cd /d "C:\Prop Control\Prop-Control\firmware\tricorder"
 
 echo.
 echo Starting PlatformIO upload...

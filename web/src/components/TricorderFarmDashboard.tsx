@@ -257,7 +257,7 @@ const TricorderFarmDashboard: React.FC = () => {
         <Toolbar>
           <DashboardIcon sx={{ mr: 2 }} />
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            🚀 Tricorder Control Farm
+            🚀 Prop Control Farm
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <Badge badgeContent={filteredTricorders.filter(d => d.status === 'online').length} color="success">

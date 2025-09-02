@@ -52,7 +52,7 @@ play startup         # Firmware finds the right file
 
 ### 1. **Generate Test Videos**
 ```bash
-cd "c:\Tricorder Control\Tricorder-Control\firmware"
+cd "c:\Prop Control\Prop-Control\firmware"
 python generate_test_patterns.py  # Creates test_videos/
 python organize_videos.py         # Creates simple_videos/
 ```

@@ -67,19 +67,19 @@ goto MENU
 
 :OPEN_TRICORDER
 echo Opening Tricorder project in VS Code...
-cd /d "C:\Tricorder Control\Tricorder-Control\firmware\tricorder"
+cd /d "C:\Prop Control\Prop-Control\firmware\tricorder"
 code .
 goto MENU
 
 :OPEN_POLYINOCULATOR
 echo Opening Polyinoculator project in VS Code...
-cd /d "C:\Tricorder Control\Tricorder-Control\firmware\polyinoculator"
+cd /d "C:\Prop Control\Prop-Control\firmware\polyinoculator"
 code .
 goto MENU
 
 :OPEN_WORKSPACE
 echo Opening firmware workspace in VS Code...
-cd /d "C:\Tricorder Control\Tricorder-Control\firmware"
+cd /d "C:\Prop Control\Prop-Control\firmware"
 code tricorder-workspace.code-workspace
 goto MENU
 

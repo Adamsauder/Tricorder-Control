@@ -4,7 +4,7 @@
     {
       "label": "Install Python Dependencies",
       "type": "shell",
-      "command": "C:/Tricorder Control/Tricorder-Control/.venv/Scripts/python.exe",
+      "command": "C:/Prop Control/Prop-Control/.venv/Scripts/python.exe",
       "args": [
         "-m",
         "pip",
@@ -24,7 +24,7 @@
     {
       "label": "Start Python Server",
       "type": "shell",
-      "command": "C:/Tricorder Control/Tricorder-Control/.venv/Scripts/python.exe",
+      "command": "C:/Prop Control/Prop-Control/.venv/Scripts/python.exe",
       "args": [
         "server/enhanced_server.py"
       ],
@@ -174,11 +174,313 @@
       }
     },
     {
+      "label": "Compile IV Injector Firmware",
+      "type": "shell",
+      "command": "pio",
+      "args": ["run"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/iv_injector"
+      },
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/firmware/iv_injector"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    },
+    {
+      "label": "Upload IV Injector Firmware",
+      "type": "shell",
+      "command": "pio",
+      "args": ["run", "--target", "upload"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/iv_injector"
+      },
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/firmware/iv_injector"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    },
+    {
+      "label": "Build and Upload IV Injector",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Compile IV Injector Firmware",
+        "Upload IV Injector Firmware"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Compile Polyinoculator Firmware",
+      "type": "shell",
+      "command": "pio",
+      "args": ["run"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/polyinoculator"
+      },
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/firmware/polyinoculator"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    },
+    {
+      "label": "Upload Polyinoculator Firmware",
+      "type": "shell",
+      "command": "pio",
+      "args": ["run", "--target", "upload"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/polyinoculator"
+      },
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/firmware/polyinoculator"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    },
+    {
+      "label": "Build and Upload Polyinoculator",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Compile Polyinoculator Firmware",
+        "Upload Polyinoculator Firmware"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Compile Tricorder Firmware",
+      "type": "shell",
+      "command": "pio",
+      "args": ["run"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/tricorder"
+      },
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/firmware/tricorder"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    },
+    {
+      "label": "Upload Tricorder Firmware",
+      "type": "shell",
+      "command": "pio",
+      "args": ["run", "--target", "upload"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/tricorder"
+      },
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "owner": "cpp",
+        "fileLocation": ["relative", "${workspaceFolder}/firmware/tricorder"],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    },
+    {
+      "label": "Build and Upload Tricorder",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Compile Tricorder Firmware",
+        "Upload Tricorder Firmware"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      }
+    },
+    {
       "label": "Setup Complete Development Environment",
       "dependsOrder": "sequence",
       "dependsOn": [
         "Install Python Dependencies",
         "Install Web Dependencies"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Monitor Defragmentor Serial",
+      "type": "shell",
+      "command": "pio",
+      "args": ["device", "monitor"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/defragmentor"
+      },
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Monitor IV Injector Serial",
+      "type": "shell",
+      "command": "pio",
+      "args": ["device", "monitor"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/iv_injector"
+      },
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Monitor Polyinoculator Serial",
+      "type": "shell",
+      "command": "pio",
+      "args": ["device", "monitor"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/polyinoculator"
+      },
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Monitor Tricorder Serial",
+      "type": "shell",
+      "command": "pio",
+      "args": ["device", "monitor"],
+      "options": {
+        "cwd": "${workspaceFolder}/firmware/tricorder"
+      },
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Build All Firmware",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "Compile Defragmentor Firmware",
+        "Compile IV Injector Firmware",
+        "Compile Polyinoculator Firmware",
+        "Compile Tricorder Firmware"
       ],
       "group": "build",
       "presentation": {
@@ -206,7 +508,7 @@
     {
       "label": "Quick Test Tricorder",
       "type": "shell",
-      "command": "C:/Tricorder Control/Tricorder-Control/.venv/Scripts/python.exe",
+      "command": "C:/Prop Control/Prop-Control/.venv/Scripts/python.exe",
       "args": [
         "server/quick_test.py"
       ],

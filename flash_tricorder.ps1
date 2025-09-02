@@ -8,7 +8,7 @@ Write-Host "Make sure your ESP32-2432S032C-I is connected via USB-C" -Foreground
 Write-Host ""
 Read-Host "Press Enter to continue"
 
-Set-Location "C:\Tricorder Control\Tricorder-Control\firmware\tricorder"
+Set-Location "C:\Prop Control\Prop-Control\firmware\tricorder"
 
 Write-Host ""
 Write-Host "Starting PlatformIO upload..." -ForegroundColor Yellow

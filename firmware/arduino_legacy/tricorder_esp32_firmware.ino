@@ -1,5 +1,5 @@
 /*
- * Tricorder Control Firmware
+ * Prop Control Firmware
  * ESP32-based prop controller with video playback and NeoPixel control
  * 
  * Hardware: ESP32-2432S032C-I Development Board
@@ -73,7 +73,7 @@ float temperature = 0.0;
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Tricorder Control Firmware v" + firmwareVersion);
+  Serial.println("Prop Control Firmware v" + firmwareVersion);
   
   // Initialize hardware
   initializeLEDs();
@@ -130,7 +130,7 @@ void initializeDisplay() {
   tft.setTextColor(TFT_WHITE);
   tft.setTextSize(2);
   tft.setCursor(0, 0);
-  tft.println("Tricorder Control");
+  tft.println("Prop Control");
   tft.println("Initializing...");
   Serial.println("Display initialized");
 }

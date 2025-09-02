@@ -55,7 +55,7 @@ This enhanced system is designed for professional film set usage with:
 
 ```bash
 # Flash the enhanced firmware
-cd "C:\Tricorder Control\Tricorder-Control\firmware\polyinoculator"
+cd "C:\Prop Control\Prop-Control\firmware\polyinoculator"
 flash_enhanced_auto.bat
 
 # Configure your prop
@@ -66,7 +66,7 @@ configure_prop.bat
 
 ```bash
 # From the main project directory
-cd "C:\Tricorder Control\Tricorder-Control"
+cd "C:\Prop Control\Prop-Control"
 python server/enhanced_server.py
 ```
 
@@ -151,7 +151,7 @@ Your enhanced tricorder system is now ready for professional film set deployment
 Run this command to begin:
 
 ```bash
-cd "C:\Tricorder Control\Tricorder-Control\firmware\polyinoculator"
+cd "C:\Prop Control\Prop-Control\firmware\polyinoculator"
 flash_enhanced_auto.bat
 ```
 

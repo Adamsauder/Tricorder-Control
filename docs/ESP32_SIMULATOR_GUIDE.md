@@ -37,7 +37,7 @@ The ESP32 simulator replicates the exact behavior of the ESP32-2432S032C-I displ
 
 1. **Start the Enhanced Server**:
    ```bash
-   # From the Tricorder-Control directory
+   # From the Prop-Control directory
    python server/enhanced_server.py
    ```
    Or double-click: `start_enhanced_server.bat`

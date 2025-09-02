@@ -1,5 +1,5 @@
 {
-  "name": "tricorder-control-web",
+  "name": "prop-control-web",
   "version": "2.0.0",
   "description": "Professional web interface for Prop Control System with OTA firmware updates",
   "type": "module",

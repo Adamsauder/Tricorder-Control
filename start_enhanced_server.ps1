@@ -6,7 +6,7 @@ Write-Host "- Web interface (http://localhost:5000)" -ForegroundColor Cyan
 Write-Host "- ESP32 Simulator (http://localhost:5000/simulator)" -ForegroundColor Cyan
 Write-Host ""
 
-Set-Location "C:\Tricorder Control\Tricorder-Control"
+Set-Location "C:\Prop Control\Prop-Control"
 & ".venv\Scripts\python.exe" "server\enhanced_server.py"
 
 Write-Host ""

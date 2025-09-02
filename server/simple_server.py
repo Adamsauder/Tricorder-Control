@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple Tricorder Control Server
+Simple Prop Control Server
 Basic UDP command server for device management and image display control
 """
 
@@ -257,7 +257,7 @@ def handle_send_command(data):
         emit('error', {'message': str(e)})
 
 if __name__ == '__main__':
-    print("Starting Tricorder Control Server...")
+    print("Starting Prop Control Server...")
     print(f"Web interface: http://localhost:{CONFIG['web_port']}")
     print(f"UDP listener: port {CONFIG['udp_port']}")
     

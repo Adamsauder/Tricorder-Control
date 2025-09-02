@@ -14,7 +14,7 @@ Write-Host "Make sure your Seeed XIAO ESP32-C3 is connected via USB-C" -Foregrou
 Write-Host ""
 Read-Host "Press Enter to continue"
 
-Set-Location "C:\Tricorder Control\Tricorder-Control\firmware\polyinoculator"
+Set-Location "C:\Prop Control\Prop-Control\firmware\polyinoculator"
 
 Write-Host ""
 Write-Host "Starting PlatformIO upload..." -ForegroundColor Yellow

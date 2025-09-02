@@ -2,18 +2,15 @@
 	"folders": [
 		{
 			"path": ".."
-		},
-		{
-			"name": "firmware",
-			"path": "../firmware"
 		}
 	],
 	"settings": {
-		"powershell.cwd": "Tricorder-Control",
+		"powershell.cwd": "Prop-Control",
 		"files.associations": {
 			"random": "cpp",
 			"chrono": "cpp",
 			"limits": "cpp"
-		}
+		},
+		"chat.agent.maxRequests": 50
 	}
 }

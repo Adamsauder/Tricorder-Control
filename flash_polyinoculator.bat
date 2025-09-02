@@ -14,7 +14,7 @@ echo Make sure your Seeed XIAO ESP32-C3 is connected via USB-C
 echo.
 pause
 
-cd /d "C:\Tricorder Control\Tricorder-Control\firmware\polyinoculator"
+cd /d "C:\Prop Control\Prop-Control\firmware\polyinoculator"
 
 echo.
 echo Starting PlatformIO upload...

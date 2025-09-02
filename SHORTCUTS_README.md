@@ -84,7 +84,7 @@ double-click: prop_control.bat
 
 ## 📂 File Structure
 ```
-Tricorder-Control/
+Prop-Control/
 ├── prop_control.bat              # 🎯 Master menu
 ├── flash_tricorder.bat          # Flash tricorder
 ├── flash_polyinoculator.bat     # Flash polyinoculator  

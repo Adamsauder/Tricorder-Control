@@ -7,6 +7,9 @@
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
 #include <WebServer.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <Update.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <FastLED.h>
@@ -18,6 +21,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
+#include <vector>
 #include "TricorderConfig.h"
 
 // Pin definitions for ESP32-2432S032C-I
@@ -90,7 +94,7 @@ TricorderConfig tricorderConfig;
 
 // Global configuration variables (loaded from tricorderConfig)
 String deviceId;
-String firmwareVersion = "Enhanced Tricorder v2.0";
+String firmwareVersion = "Enhanced Tricorder v2.1 OTA";
 
 // Forward declaration of LED array (defined later)
 extern CRGB leds[NUM_NEOPIXELS];
@@ -127,6 +131,11 @@ WiFiUDP udp;
 WiFiUDP sacnUdp;  // Separate UDP socket for sACN
 WebServer webServer(80);
 JPEGDEC jpeg;
+
+// Server Discovery
+std::vector<IPAddress> serverIPs;  // Discovered server IPs
+unsigned long lastDiscoveryTime = 0;
+const unsigned long DISCOVERY_INTERVAL = 30000;  // Rediscover servers every 30 seconds
 
 // Dual-Core Task Handles
 TaskHandle_t networkTaskHandle = NULL;
@@ -205,9 +214,45 @@ bool sacnActive = false;  // True when receiving sACN data
 uint8_t sacnSequence = 0;  // Track sACN sequence numbers
 bool sacnPriority = false;  // True when sACN should override UDP LED commands
 
-// Video frame callback
+// Software dimming function for RGB565 pixels
+void dimPixelBuffer(uint16_t* pixels, int count, uint8_t brightness) {
+  if (brightness == 255) return; // No dimming needed at full brightness
+  
+  // Convert brightness from 0-255 to 0-256 for more efficient multiplication
+  uint16_t scale = (brightness + 1);
+  
+  for (int i = 0; i < count; i++) {
+    uint16_t pixel = pixels[i];
+    
+    // Extract RGB components from RGB565
+    uint8_t r = (pixel >> 11) & 0x1F;  // 5 bits
+    uint8_t g = (pixel >> 5) & 0x3F;   // 6 bits  
+    uint8_t b = pixel & 0x1F;          // 5 bits
+    
+    // Apply brightness scaling
+    r = (r * scale) >> 8;
+    g = (g * scale) >> 8;
+    b = (b * scale) >> 8;
+    
+    // Recombine into RGB565
+    pixels[i] = (r << 11) | (g << 5) | b;
+  }
+}
+
+// Video frame callback with software dimming
 int JPEGDraw(JPEGDRAW *pDraw) {
-  // Draw the JPEG frame to the TFT display
+  // Get current display brightness setting for software dimming
+  uint8_t brightness = tricorderConfig.getDisplayBrightness();
+  
+  // Apply software dimming if brightness is less than full
+  if (brightness < 255) {
+    // Create a copy of the pixel data for dimming
+    uint16_t* dimmedPixels = (uint16_t*)pDraw->pPixels;
+    int pixelCount = pDraw->iWidth * pDraw->iHeight;
+    dimPixelBuffer(dimmedPixels, pixelCount, brightness);
+  }
+  
+  // Draw the (possibly dimmed) JPEG frame to the TFT display
   tft.pushImage(pDraw->x, pDraw->y, pDraw->iWidth, pDraw->iHeight, pDraw->pPixels);
   return 1;
 }
@@ -223,6 +268,7 @@ void setBuiltinLED(int r, int g, int b);
 void sendResponse(String commandId, String result);
 void sendStatus(String commandId);
 void sendPeriodicStatus();
+void discoverServers();
 bool initializeSDCard();
 bool playVideo(String filename, bool loop = false);
 void stopVideo();
@@ -262,6 +308,11 @@ void ledTask(void *pvParameters);
 void networkTask(void *pvParameters);
 void videoTask(void *pvParameters);
 void processNetworkCommand(String jsonCommand);
+
+// OTA Update functions
+void performOTAUpdate(String firmwareUrl, String commandId);
+void handleOTAUpdate(String firmwareUrl, String commandId);
+void handleRemoteFileUpload(String filename, String fileUrl, String commandId);
 
 // Enhanced web server functions
 void setupWebServer();
@@ -1066,6 +1117,12 @@ void networkTask(void *pvParameters) {
         sendPeriodicStatus();
         lastStatusSend = currentTime;
       }
+      
+      // Discover servers periodically (every 30 seconds)
+      if (currentTime - lastDiscoveryTime > DISCOVERY_INTERVAL) {
+        discoverServers();
+        lastDiscoveryTime = currentTime;
+      }
     }
     
     // Small delay to prevent overwhelming the network
@@ -1141,6 +1198,34 @@ void processNetworkCommand(String jsonCommand) {
       udp.beginPacket(udp.remoteIP(), udp.remotePort());
       udp.print(responseStr);
       udp.endPacket();
+    }
+    // Handle server discovery response
+    else if (action == "server_discovery_response") {
+      String serverIP = doc["server_ip"];
+      int serverPort = doc["server_port"];
+      
+      Serial.printf("📡 Discovered server at %s:%d\n", serverIP.c_str(), serverPort);
+      
+      // Add server to discovered servers list
+      IPAddress serverAddr;
+      if (serverAddr.fromString(serverIP)) {
+        bool alreadyKnown = false;
+        for (size_t i = 0; i < serverIPs.size(); i++) {
+          if (serverIPs[i] == serverAddr) {
+            alreadyKnown = true;
+            break;
+          }
+        }
+        
+        if (!alreadyKnown) {
+          serverIPs.push_back(serverAddr);
+          Serial.printf("✅ Added server %s to discovery list (total: %d)\n", serverIP.c_str(), serverIPs.size());
+        } else {
+          Serial.printf("🔄 Server %s already known\n", serverIP.c_str());
+        }
+      } else {
+        Serial.printf("❌ Invalid server IP address: %s\n", serverIP.c_str());
+      }
     }
     // Handle LED commands by sending to LED task
     else if (action == "set_led_color") {
@@ -1376,6 +1461,69 @@ void processNetworkCommand(String jsonCommand) {
       
       sendResponse(commandId, "Current LED colors saved as default startup colors");
     }
+    else if (action == "ota_update") {
+      String firmwareUrl = "";
+      if (doc["parameters"].is<JsonObject>() && doc["parameters"]["firmware_url"].is<String>()) {
+        firmwareUrl = doc["parameters"]["firmware_url"].as<String>();
+      }
+      
+      if (firmwareUrl.length() > 0) {
+        Serial.printf("🔄 Starting OTA update from: %s\n", firmwareUrl.c_str());
+        sendResponse(commandId, "OTA update started");
+        
+        // Perform OTA update in background to avoid blocking the response
+        handleOTAUpdate(firmwareUrl, commandId);
+      } else {
+        Serial.println("❌ OTA update failed: No firmware URL provided");
+        sendResponse(commandId, "OTA update failed: No firmware URL provided");
+      }
+    }
+    else if (action == "set_display_brightness") {
+      int brightness = 255; // Default to full brightness
+      
+      if (doc["parameters"].is<JsonObject>() && doc["parameters"]["brightness"].is<int>()) {
+        brightness = doc["parameters"]["brightness"].as<int>();
+      } else if (doc["brightness"].is<int>()) {
+        brightness = doc["brightness"].as<int>();
+      }
+      
+      // Clamp brightness to valid range (0-255)
+      brightness = constrain(brightness, 0, 255);
+      
+      Serial.printf("Network Task: Setting display brightness to %d (software dimming)\n", brightness);
+      
+      // Save to configuration for software dimming in JPEGDraw
+      tricorderConfig.setDisplayBrightness(brightness);
+      
+      // Also try hardware brightness control (may not work on all boards)
+      ledcWrite(0, brightness);
+      
+      sendResponse(commandId, String("Display brightness set to ") + String(brightness) + " (software dimming)");
+    }
+    else if (action == "upload_file") {
+      String filename = "";
+      String fileUrl = "";
+      
+      if (doc["parameters"].is<JsonObject>()) {
+        if (doc["parameters"]["filename"].is<String>()) {
+          filename = doc["parameters"]["filename"].as<String>();
+        }
+        if (doc["parameters"]["url"].is<String>()) {
+          fileUrl = doc["parameters"]["url"].as<String>();
+        }
+      }
+      
+      if (filename.length() > 0 && fileUrl.length() > 0) {
+        Serial.printf("📁 Starting file upload: %s from %s\n", filename.c_str(), fileUrl.c_str());
+        sendResponse(commandId, "File upload started");
+        
+        // Perform file download and save to SD card
+        handleRemoteFileUpload(filename, fileUrl, commandId);
+      } else {
+        Serial.println("❌ File upload failed: Missing filename or URL");
+        sendResponse(commandId, "File upload failed: Missing filename or URL");
+      }
+    }
   }
 }
 
@@ -1530,6 +1678,86 @@ void sendStatus(String commandId) {
   Serial.printf("Sent status: %s\n", response.c_str());
 }
 
+void discoverServers() {
+  // Only discover if enough time has passed
+  if (millis() - lastDiscoveryTime < DISCOVERY_INTERVAL && serverIPs.size() > 0) {
+    return;
+  }
+  
+  lastDiscoveryTime = millis();
+  Serial.println("🔍 Discovering servers...");
+  
+  // Clear existing servers if they're old
+  serverIPs.clear();
+  
+  // Create discovery message
+  JsonDocument discoveryDoc;
+  discoveryDoc["deviceId"] = deviceId;
+  discoveryDoc["action"] = "server_discovery";
+  discoveryDoc["timestamp"] = millis();
+  
+  String discoveryMsg;
+  serializeJson(discoveryDoc, discoveryMsg);
+  
+  // Broadcast discovery to multiple subnets
+  IPAddress localIP = WiFi.localIP();
+  
+  // Try multiple subnet broadcasts
+  IPAddress broadcastIPs[] = {
+    IPAddress(localIP[0], localIP[1], localIP[2], 255),    // Local subnet broadcast
+    IPAddress(192, 168, 1, 255),                           // 192.168.1.x broadcast
+    IPAddress(192, 168, 0, 255),                           // 192.168.0.x broadcast
+    IPAddress(10, 0, 0, 255)                               // 10.0.0.x broadcast
+  };
+  
+  // Send discovery to all broadcast addresses
+  for (int i = 0; i < 4; i++) {
+    udp.beginPacket(broadcastIPs[i], UDP_PORT);
+    udp.write((const uint8_t*)discoveryMsg.c_str(), discoveryMsg.length());
+    udp.endPacket();
+  }
+  
+  Serial.printf("📡 Sent discovery broadcast: %s\n", discoveryMsg.c_str());
+  
+  // Wait a moment for responses
+  delay(100);
+  
+  // Check for discovery responses
+  int packetSize = udp.parsePacket();
+  while (packetSize) {
+    String response = "";
+    for (int i = 0; i < packetSize; i++) {
+      response += (char)udp.read();
+    }
+    
+    // Parse response
+    JsonDocument responseDoc;
+    if (deserializeJson(responseDoc, response) == DeserializationError::Ok) {
+      if (responseDoc["action"] == "server_discovery_response") {
+        IPAddress serverIP = udp.remoteIP();
+        
+        // Add server IP if not already in list
+        bool found = false;
+        for (IPAddress ip : serverIPs) {
+          if (ip == serverIP) {
+            found = true;
+            break;
+          }
+        }
+        
+        if (!found) {
+          serverIPs.push_back(serverIP);
+          Serial.printf("✅ Discovered server at: %s\n", serverIP.toString().c_str());
+        }
+      }
+    }
+    
+    packetSize = udp.parsePacket();
+  }
+  
+  Serial.printf("🎯 Found %d servers\n", serverIPs.size());
+}
+
 void sendPeriodicStatus() {
   // Send periodic status to server (broadcast to server IP)
   JsonDocument doc;
@@ -1557,13 +1785,27 @@ void sendPeriodicStatus() {
   String statusMsg;
   serializeJson(doc, statusMsg);
   
-  // Broadcast to server subnet (try a few common server IPs)
-  IPAddress localIP = WiFi.localIP();
-  IPAddress serverIP(localIP[0], localIP[1], localIP[2], 24); // Usually .24 for server
+  // Send to discovered servers, or broadcast discovery if none found
+  if (serverIPs.size() == 0) {
+    // No servers discovered yet, send broadcast discovery
+    discoverServers();
+  }
   
-  udp.beginPacket(serverIP, UDP_PORT);
-  udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
-  udp.endPacket();
+  if (serverIPs.size() > 0) {
+    // Send to all discovered servers
+    for (IPAddress serverIP : serverIPs) {
+      udp.beginPacket(serverIP, UDP_PORT);
+      udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
+      udp.endPacket();
+    }
+  } else {
+    // Fallback: broadcast to local subnet
+    IPAddress localIP = WiFi.localIP();
+    IPAddress broadcastIP = IPAddress(localIP[0], localIP[1], localIP[2], 255);
+    udp.beginPacket(broadcastIP, UDP_PORT);
+    udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
+    udp.endPacket();
+  }
 }
 
 void setBuiltinLED(int r, int g, int b) {
@@ -2612,7 +2854,7 @@ void handleRoot() {
   html += "<p><strong>Prop ID:</strong> " + String(tricorderConfig.getPropId()) + "</p>";
   html += "<p><strong>Description:</strong> " + String(tricorderConfig.getDescription()) + "</p>";
   html += "<p><strong>IP Address:</strong> " + WiFi.localIP().toString() + "</p>";
-  html += "<p><strong>Firmware:</strong> Enhanced Tricorder v2.0</p>";
+  html += "<p><strong>Firmware:</strong> Enhanced Tricorder v2.1 OTA</p>";
   html += "<p><strong>WiFi RSSI:</strong> " + String(WiFi.RSSI()) + " dBm</p>";
   html += "<p><strong>Free Heap:</strong> " + String(ESP.getFreeHeap()) + " bytes</p>";
   html += "<p><strong>Battery:</strong> " + getBatteryStatus() + "</p>";
@@ -2802,7 +3044,7 @@ void handleGetStatus() {
   
   doc["deviceLabel"] = tricorderConfig.getDeviceLabel();
   doc["propId"] = tricorderConfig.getPropId();
-  doc["firmwareVersion"] = "Enhanced Tricorder v2.0";
+  doc["firmwareVersion"] = "Enhanced Tricorder v2.1 OTA";
   doc["ipAddress"] = WiFi.localIP().toString();
   doc["macAddress"] = WiFi.macAddress();
   doc["wifiRSSI"] = WiFi.RSSI();
@@ -3091,6 +3333,212 @@ void blinkResetIndicator() {
     digitalWrite(RGB_LED_B, LOW);
     delay(200);
   }
+}
+
+// OTA Update Functions
+void handleOTAUpdate(String firmwareUrl, String commandId) {
+  Serial.printf("🔄 Handling OTA update from URL: %s\n", firmwareUrl.c_str());
+  
+  // Show OTA update status on display
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_CYAN);
+  tft.setTextSize(2);
+  tft.setCursor(10, 50);
+  tft.println("OTA UPDATE");
+  tft.setCursor(10, 80);
+  tft.println("Starting...");
+  
+  // Set LED to indicate OTA in progress
+  setBuiltinLED(0, 0, 255); // Blue for OTA
+  
+  // Perform the OTA update
+  performOTAUpdate(firmwareUrl, commandId);
+}
+
+void performOTAUpdate(String firmwareUrl, String commandId) {
+  Serial.printf("📡 Starting OTA update from: %s\n", firmwareUrl.c_str());
+  
+  // Update display
+  tft.setCursor(10, 110);
+  tft.println("Downloading...");
+  
+  // Configure HTTPUpdate
+  httpUpdate.setLedPin(2, LOW); // Use GPIO2 (our onboard LED) for progress
+  httpUpdate.rebootOnUpdate(false); // We'll handle reboot ourselves
+  
+  // Set up progress callback
+  httpUpdate.onProgress([](int cur, int total) {
+    if (total > 0) {
+      int progress = (cur * 100) / total;
+      Serial.printf("📊 OTA Progress: %d%% (%d/%d bytes)\n", progress, cur, total);
+      
+      // Update display
+      tft.fillRect(10, 140, 220, 30, TFT_BLACK); // Clear progress area
+      tft.setCursor(10, 140);
+      tft.printf("Progress: %d%%", progress);
+      
+      // Update LED brightness based on progress
+      int brightness = map(progress, 0, 100, 50, 255);
+      setBuiltinLED(0, 0, brightness);
+    }
+  });
+  
+  // Perform the update
+  WiFiClient client;
+  t_httpUpdate_return result = httpUpdate.update(client, firmwareUrl);
+  
+  switch (result) {
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("❌ OTA Update failed: %s\n", httpUpdate.getLastErrorString().c_str());
+      tft.fillRect(10, 110, 220, 60, TFT_BLACK);
+      tft.setTextColor(TFT_RED);
+      tft.setCursor(10, 110);
+      tft.println("UPDATE FAILED");
+      tft.setCursor(10, 140);
+      tft.println(httpUpdate.getLastErrorString().c_str());
+      setBuiltinLED(255, 0, 0); // Red for error
+      break;
+      
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("⚠️ No updates available");
+      tft.fillRect(10, 110, 220, 60, TFT_BLACK);
+      tft.setTextColor(TFT_YELLOW);
+      tft.setCursor(10, 110);
+      tft.println("NO UPDATES");
+      setBuiltinLED(255, 255, 0); // Yellow for no update
+      break;
+      
+    case HTTP_UPDATE_OK:
+      Serial.println("✅ OTA Update successful! Rebooting...");
+      tft.fillScreen(TFT_BLACK);
+      tft.setTextColor(TFT_GREEN);
+      tft.setTextSize(2);
+      tft.setCursor(10, 50);
+      tft.println("UPDATE");
+      tft.setCursor(10, 80);
+      tft.println("SUCCESS!");
+      tft.setCursor(10, 110);
+      tft.println("Rebooting...");
+      setBuiltinLED(0, 255, 0); // Green for success
+      
+      delay(2000); // Give time to see the message
+      
+      // Gracefully stop tasks before reboot
+      if (videoTaskHandle) vTaskDelete(videoTaskHandle);
+      if (ledTaskHandle) vTaskDelete(ledTaskHandle);
+      if (networkTaskHandle) vTaskDelete(networkTaskHandle);
+      
+      ESP.restart();
+      break;
+  }
+}
+
+// File Upload Functions
+void handleRemoteFileUpload(String filename, String fileUrl, String commandId) {
+  Serial.printf("📁 Handling file upload: %s from %s\n", filename.c_str(), fileUrl.c_str());
+  
+  // Check if SD card is available
+  if (!SD.begin(SD_CS)) {
+    Serial.println("❌ SD card not available for file upload");
+    sendResponse(commandId, "File upload failed: SD card not available");
+    return;
+  }
+  
+  // Show file upload status on display
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_CYAN);
+  tft.setTextSize(2);
+  tft.setCursor(10, 50);
+  tft.println("FILE UPLOAD");
+  tft.setCursor(10, 80);
+  tft.printf("File: %s", filename.c_str());
+  tft.setCursor(10, 110);
+  tft.println("Downloading...");
+  
+  // Set LED to indicate upload in progress
+  setBuiltinLED(255, 165, 0); // Orange for file upload
+  
+  // Create HTTP client
+  HTTPClient http;
+  http.begin(fileUrl);
+  http.setTimeout(30000); // 30 second timeout
+  
+  int httpCode = http.GET();
+  
+  if (httpCode == HTTP_CODE_OK) {
+    int len = http.getSize();
+    Serial.printf("📊 File size: %d bytes\n", len);
+    
+    // Create file on SD card
+    File file = SD.open("/" + filename, FILE_WRITE);
+    if (!file) {
+      Serial.printf("❌ Failed to create file: %s\n", filename.c_str());
+      sendResponse(commandId, "File upload failed: Could not create file on SD card");
+      http.end();
+      setBuiltinLED(255, 0, 0); // Red for error
+      return;
+    }
+    
+    // Get stream and write to file
+    WiFiClient* stream = http.getStreamPtr();
+    uint8_t buffer[1024];
+    int totalWritten = 0;
+    
+    tft.setCursor(10, 140);
+    tft.println("Writing to SD...");
+    
+    while (http.connected() && (len > 0 || len == -1)) {
+      size_t available = stream->available();
+      if (available) {
+        int c = stream->readBytes(buffer, min(available, sizeof(buffer)));
+        file.write(buffer, c);
+        totalWritten += c;
+        
+        if (len > 0) {
+          len -= c;
+          int progress = (totalWritten * 100) / (totalWritten + len);
+          if (progress % 10 == 0) {
+            Serial.printf("📊 Upload Progress: %d%% (%d bytes)\n", progress, totalWritten);
+          }
+        }
+      }
+      delay(1);
+    }
+    
+    file.close();
+    http.end();
+    
+    Serial.printf("✅ File upload successful: %s (%d bytes)\n", filename.c_str(), totalWritten);
+    
+    // Update display
+    tft.fillRect(10, 110, 220, 60, TFT_BLACK);
+    tft.setTextColor(TFT_GREEN);
+    tft.setCursor(10, 110);
+    tft.println("UPLOAD SUCCESS!");
+    tft.setCursor(10, 140);
+    tft.printf("%d bytes", totalWritten);
+    
+    setBuiltinLED(0, 255, 0); // Green for success
+    sendResponse(commandId, "File upload successful");
+    
+  } else {
+    Serial.printf("❌ HTTP GET failed: %d\n", httpCode);
+    http.end();
+    
+    tft.fillRect(10, 110, 220, 60, TFT_BLACK);
+    tft.setTextColor(TFT_RED);
+    tft.setCursor(10, 110);
+    tft.println("UPLOAD FAILED!");
+    tft.setCursor(10, 140);
+    tft.printf("HTTP: %d", httpCode);
+    
+    setBuiltinLED(255, 0, 0); // Red for error
+    sendResponse(commandId, "File upload failed: HTTP error " + String(httpCode));
+  }
+  
+  // Return LED to normal after delay
+  delay(2000);
+  setBuiltinLED(0, 0, 0);
 }
 
 void checkBootButtonReset() {

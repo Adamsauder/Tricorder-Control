@@ -51,6 +51,9 @@ private:
   TricorderConfigData config;
   bool initialized;
   
+  // Helper functions
+  String generateUniqueId();
+  
 public:
   TricorderConfig();
   ~TricorderConfig();

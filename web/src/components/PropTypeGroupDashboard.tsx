@@ -15,6 +15,8 @@ import {
   MenuItem,
   ListItemIcon,
   ListItemText,
+  Tabs,
+  Tab,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -22,8 +24,10 @@ import {
   Refresh as RefreshIcon,
   MoreVert as MoreVertIcon,
   Settings as SettingsIcon,
+  PlayArrow as PlaybookIcon,
 } from '@mui/icons-material';
 import PropTypeCard from './PropTypeCard';
+import PlaybookControl from './PlaybookControl';
 
 // API functions for prop-type operations
 const API_BASE = process.env.NODE_ENV === 'development' ? '' : 'http://localhost:8080';
@@ -49,6 +53,7 @@ const PropTypeGroupDashboard: React.FC = () => {
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [hasError, setHasError] = useState(false);
+  const [activeTab, setActiveTab] = useState(0);
 
   // Catch any errors in the component
   useEffect(() => {
@@ -240,6 +245,10 @@ const PropTypeGroupDashboard: React.FC = () => {
     setAnchorEl(null);
   };
 
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setActiveTab(newValue);
+  };
+
   // Initial data load
   useEffect(() => {
     fetchPropTypes();
@@ -289,80 +298,103 @@ const PropTypeGroupDashboard: React.FC = () => {
             </IconButton>
           </Box>
         </Toolbar>
+        {/* Tabs */}
+        <Tabs
+          value={activeTab}
+          onChange={handleTabChange}
+          textColor="inherit"
+          indicatorColor="secondary"
+          sx={{ borderTop: 1, borderColor: 'divider' }}
+        >
+          <Tab label="Dashboard" icon={<DashboardIcon />} />
+          <Tab label="Playbook" icon={<PlaybookIcon />} />
+        </Tabs>
       </AppBar>
 
       <Container maxWidth="xl">
-        {/* Error Alert */}
-        {error && (
-          <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
-            {error}
-          </Alert>
+        {/* Tab Content */}
+        {activeTab === 0 && (
+          <>
+            {/* Error Alert */}
+            {error && (
+              <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
+                {error}
+              </Alert>
+            )}
+
+            {/* No Data Message */}
+            {!loading && propTypes.length === 0 && (
+              <Alert severity="info" sx={{ mb: 3 }}>
+                No prop devices found. Make sure devices are powered on and connected to the network.
+              </Alert>
+            )}
+
+            {/* Prop Type Cards */}
+            <Grid container spacing={3}>
+              {propTypes.map((propType) => (
+                <Grid item xs={12} lg={6} xl={4} key={propType.type}>
+                  <PropTypeCard
+                    propType={propType.type}
+                    devices={propType.devices}
+                    onSacnAddressChange={handleSacnAddressChange}
+                    onFirmwareUpdate={handleFirmwareUpdate}
+                    onBulkCommand={handleBulkCommand}
+                    onSaveCurrentAsDefault={handleSaveCurrentAsDefault}
+                  />
+                </Grid>
+              ))}
+            </Grid>
+
+            {/* System Statistics */}
+            {propTypes.length > 0 && (
+              <Box mt={4} p={3} bgcolor="background.paper" borderRadius={2}>
+                <Typography variant="h6" gutterBottom>
+                  System Overview
+                </Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="h4" color="primary">
+                      {propTypes.length}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Prop Types
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="h4" color="success.main">
+                      {totalOnline}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Online Devices
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="h4" color="info.main">
+                      {totalDevices}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Total Devices
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6} md={3}>
+                    <Typography variant="h4" color="warning.main">
+                      {totalDevices - totalOnline}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Offline Devices
+                    </Typography>
+                  </Grid>
+                </Grid>
+              </Box>
+            )}
+          </>
         )}
 
-        {/* No Data Message */}
-        {!loading && propTypes.length === 0 && (
-          <Alert severity="info" sx={{ mb: 3 }}>
-            No prop devices found. Make sure devices are powered on and connected to the network.
-          </Alert>
-        )}
-
-        {/* Prop Type Cards */}
-        <Grid container spacing={3}>
-          {propTypes.map((propType) => (
-            <Grid item xs={12} lg={6} xl={4} key={propType.type}>
-              <PropTypeCard
-                propType={propType.type}
-                devices={propType.devices}
-                onSacnAddressChange={handleSacnAddressChange}
-                onFirmwareUpdate={handleFirmwareUpdate}
-                onBulkCommand={handleBulkCommand}
-                onSaveCurrentAsDefault={handleSaveCurrentAsDefault}
-              />
-            </Grid>
-          ))}
-        </Grid>
-
-        {/* System Statistics */}
-        {propTypes.length > 0 && (
-          <Box mt={4} p={3} bgcolor="background.paper" borderRadius={2}>
-            <Typography variant="h6" gutterBottom>
-              System Overview
-            </Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={6} md={3}>
-                <Typography variant="h4" color="primary">
-                  {propTypes.length}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Prop Types
-                </Typography>
-              </Grid>
-              <Grid item xs={6} md={3}>
-                <Typography variant="h4" color="success.main">
-                  {totalOnline}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Online Devices
-                </Typography>
-              </Grid>
-              <Grid item xs={6} md={3}>
-                <Typography variant="h4" color="info.main">
-                  {totalDevices}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Total Devices
-                </Typography>
-              </Grid>
-              <Grid item xs={6} md={3}>
-                <Typography variant="h4" color="warning.main">
-                  {totalDevices - totalOnline}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Offline Devices
-                </Typography>
-              </Grid>
-            </Grid>
-          </Box>
+        {/* Playbook Tab Content */}
+        {activeTab === 1 && (
+          <PlaybookControl 
+            devices={propTypes.find(pt => pt.type === 'tricorder')?.devices || []} 
+          />
         )}
       </Container>
 

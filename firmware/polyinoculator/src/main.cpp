@@ -1,30 +1,19 @@
 /*
- * Polyinoculator Control Firmware
+ * Enhanced Polyinoculator Control Firmware
  * Seeed Studio XIAO ESP32-C3 based prop controller
- * Multi-strip WS2812B L  Serial.printf("  Serial.printf("Device: %s (%s)\n", deviceLabel.c_str(), deviceId.c_str());
-  Serial.printf("Multi-strip configuration: Strip1=%d LEDs, Strip2=%d LEDs, Strip3=%d LEDs\n", 
-                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
-  Serial.printf("Pin assignments: D10=%d LEDs, D3=%d LEDs, D4=%d LEDs\n",
-                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
-  Serial.printf("WiFi: %s / %s\n", wifiSSID.c_str(), wifiPassword.c_str());: %s (%  // Test Strip 1 - Red
-  Se  // Test Strip 3 - Blue
-  Serial.println("Testing Strip 3 (D4/GPIO6) - BLUE");al.println("Testing Strip 1 (D10/GPIO18) - RED");
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Red);
-  FastLED.show();
-  delay(2000);
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-  FastLED.show();
-  delay(500);
-  
-  // Test Strip 2 - Green  
-  Serial.println("Testing Strip 2 (D3/GPIO21) - GREEN");
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Green);eLabel.c_str(), deviceId.c_str());
-  Serial.printf("Multi-strip configuration: Strip1=%d LEDs, Strip2=%d LEDs, Strip3=%d LEDs\n", 
-                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
-  Serial.printf("Pin assignments: D10=%d LEDs, D3=%d LEDs, D4=%d LEDs\n",
-                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
-  Serial.printf("WiFi: %s / %s\n", wifiSSID.c_str(), wifiPassword.c_str());ntrolled via SACN (E1.31) protocol
- * Enhanced with persistent configuration storage
+ * Multi-strip WS2812B LED controller with sACN (E1.31) protocol support
+ * Enhanced with OTA updates, persistent configuration, and server integration
+ * 
+ * Features:
+ * - Three LED strips on pins D3, D4 (longer), D5
+ * - sACN E1.31 protocol support with priority handling
+ * - OTA firmware updates via web interface
+ * - Persistent configuration storage
+ * - Battery monitoring
+ * - Web server for configuration
+ * - UDP communication with prop control server
+ * - Save current colors as default startup colors
+ * - Set sACN address by group functionality
  */
 
 #include <WiFi.h>
@@ -33,24 +22,28 @@
 #include <ArduinoJson.h>
 #include <FastLED.h>
 #include <WebServer.h>
-#include "PropConfig.h"
+#include <HTTPUpdate.h>
+#include <Preferences.h>
+#include "PolyinoculatorConfig.h"
 
-// Pin definitions for Seeed Studio XIAO ESP32-C3 - Multi-strip configuration
-// Note: Using digital pin numbers (D10, D3, D4) - preserves USB-JTAG functionality
-#define LED_PIN_1 D10      // Strip 1: 14 pixels on D10 (GPIO18 - USB-JTAG but can be overridden)
-#define LED_PIN_2 D3       // Strip 2: 8 pixels on D3 (GPIO21)
-#define LED_PIN_3 D4       // Strip 3: 8 pixels on D4 (GPIO6)
-#define NUM_LEDS_1 14      // Strip 1 length (red strip)
-#define NUM_LEDS_2 8       // Strip 2 length (green strip)
-#define NUM_LEDS_3 8       // Strip 3 length
-#define TOTAL_LEDS 30      // Total: 14 + 8 + 8 = 30 pixels
-#define STATUS_LED_PIN 3   // Optional status LED pin
+// Pin definitions for Seeed Studio XIAO ESP32-C3 - Updated pin configuration
+#define LED_PIN_1 D3       // Strip 1: 30 pixels on D3 (GPIO4)
+#define LED_PIN_2 D4       // Strip 2: 60 pixels on D4 (GPIO5) - LONGER RIBBON
+#define LED_PIN_3 D5       // Strip 3: 30 pixels on D5 (GPIO6)
+#define STATUS_LED_PIN 21  // Built-in LED pin for status
+#define BATTERY_ADC_PIN A0 // Battery voltage monitoring
 
-// Network configuration - loaded from persistent storage
-PropConfig propConfig;
-PropConfig::Config config;
+// LED configuration - configurable via settings
+#define MAX_LEDS_1 30      // Maximum LEDs for Strip 1
+#define MAX_LEDS_2 60      // Maximum LEDs for Strip 2 (longer ribbon)
+#define MAX_LEDS_3 30      // Maximum LEDs for Strip 3
+#define TOTAL_MAX_LEDS 120 // Total maximum LEDs
 
-// Network defaults (overridden by stored config)
+// Configuration and state management
+PolyinoculatorConfig polyConfig;
+PolyinoculatorConfigData config;
+
+// Network configuration
 const int UDP_PORT = 8888;
 const int WEB_PORT = 80;
 const int SACN_PORT = 5568;     // sACN E1.31 standard port
@@ -61,30 +54,30 @@ const int SACN_PORT = 5568;     // sACN E1.31 standard port
 #define E131_DATA_OFFSET 126
 #define E131_UNIVERSE_OFFSET 113
 
-// Hardware configuration - now configurable
+// Device configuration - loaded from storage
 String deviceId;
 String deviceLabel;
-String firmwareVersion = "Enhanced Polyinoculator v2.0";
+String firmwareVersion = "Enhanced Polyinoculator v2.1 OTA";
 int sacnUniverse;
 int sacnStartAddress;
-int totalLEDs;
 int fixtureNumber;
 String wifiSSID;
 String wifiPassword;
 
-// Hardware objects - Separate arrays for each strip
-CRGB leds1[NUM_LEDS_1];  // Strip 1: GPIO5, 7 LEDs
-CRGB leds2[NUM_LEDS_2];  // Strip 2: GPIO6, 4 LEDs
-CRGB leds3[NUM_LEDS_3];  // Strip 3: GPIO7, 4 LEDs
+// Hardware objects - Separate arrays for each strip with maximum sizes
+CRGB leds1[MAX_LEDS_1];  // Strip 1: D3 (GPIO4), up to 30 LEDs
+CRGB leds2[MAX_LEDS_2];  // Strip 2: D4 (GPIO5), up to 60 LEDs - LONGER RIBBON
+CRGB leds3[MAX_LEDS_3];  // Strip 3: D5 (GPIO6), up to 30 LEDs
 WiFiUDP udp;
+WiFiUDP sacnUdp;
 WebServer webServer(80);
 
 // State variables
 bool wifiConnected = false;
 CRGB currentColor = CRGB::Black;
-uint8_t ledBrightness = 128;
+uint8_t ledBrightness = 255;
 bool sacnEnabled = true;
-WiFiUDP sacnUdp;  // Separate UDP socket for sACN
+int actualLeds1, actualLeds2, actualLeds3;  // Actual LED counts from config
 
 // sACN State Variables
 unsigned long lastSacnPacket = 0;
@@ -93,965 +86,648 @@ bool sacnActive = false;  // True when receiving sACN data
 uint8_t sacnSequence = 0;  // Track sACN sequence numbers
 bool sacnPriority = false;  // True when sACN should override UDP LED commands
 
+// Battery monitoring
+float batteryVoltage = 0.0;
+int batteryPercentage = 0;
+String batteryStatus = "Unknown";
+unsigned long lastBatteryRead = 0;
+const unsigned long BATTERY_READ_INTERVAL = 5000; // Read battery every 5 seconds
+
 // Timing variables
 unsigned long lastStatusSend = 0;
 const unsigned long STATUS_INTERVAL = 10000; // Send status every 10 seconds
+unsigned long lastSacnTimeout = 0;
+const unsigned long SACN_TIMEOUT = 3000; // 3 seconds without sACN = timeout
+
+// Task handles for background operations
+TaskHandle_t networkTaskHandle = nullptr;
+TaskHandle_t ledTaskHandle = nullptr;
+TaskHandle_t sacnTaskHandle = nullptr;
+
+// Server discovery
+String serverIP = "";
+int serverPort = 8888;
+unsigned long lastServerDiscovery = 0;
+const unsigned long SERVER_DISCOVERY_INTERVAL = 30000; // Discover server every 30 seconds
 
 // Function declarations
-void loadConfiguration();
+void setupWiFi();
+void handleUDPPacket();
+void sendStatus();
 void setupWebServer();
-void handleGetConfig();
-void handleSetConfig();
-void handleFactoryReset();
-void handleUDPCommands();
-void setAllLEDColor(int r, int g, int b);
-void setStripColor(int stripNum, int r, int g, int b);
-void setLEDBrightness(int brightness);
-void setIndividualLED(int ledIndex, int r, int g, int b);
-void rainbow();
-void scannerEffect(int r, int g, int b, int delayMs = 100);
-void pulseEffect(int r, int g, int b, int duration = 2000);
-void sendResponse(String commandId, String result);
-void sendStatus(String commandId);
-void sendPeriodicStatus();
-void processNetworkCommand(String jsonCommand);
-
-// sACN E1.31 Functions
-void initializeSACN();
-void handleSACNPackets();
-bool processSACNPacket(uint8_t* packet, size_t length);
-void updateLEDsFromDMX(uint8_t* dmxData);
-void setSACNPriority(bool enabled);
-String getMulticastAddress(int universe);
+void handleSacnPacket();
+void updateLEDs();
+void loadConfiguration();
+void saveConfiguration();
+void serverDiscovery();
+void networkTask(void* parameter);
+void ledTask(void* parameter);
+void sacnTask(void* parameter);
+void setBuiltinLED(uint8_t r, uint8_t g, uint8_t b);
+void handleOTAUpdate(String firmwareUrl, String commandId);
+void performOTAUpdate(String firmwareUrl, String commandId);
+void handleRemoteFileUpload(String filename, String fileUrl, String commandId);
+void sendResponse(String commandId, String message);
+void loadDefaultColors();
+void saveCurrentAsDefault();
+void updateBatteryStatus();
+String getBatteryStatusString(float voltage);
+int calculateBatteryPercentage(float voltage);
+void handleSetSacnAddressByGroup(int groupNumber);
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Starting Enhanced Polyinoculator Control System...");
+  delay(2000);
   
-  // Initialize configuration system first
-  if (!propConfig.begin()) {
-    Serial.println("ERROR: Failed to initialize configuration storage!");
-    return;
-  }
+  Serial.println("🚀 Enhanced Polyinoculator Starting...");
+  Serial.printf("Firmware: %s\n", firmwareVersion.c_str());
   
-  // Load configuration (with WiFi credentials)
+  // Initialize configuration
   loadConfiguration();
   
-  Serial.printf("Device: %s (%s)\n", deviceLabel.c_str(), deviceId.c_str());
-  Serial.printf("Multi-strip configuration: Strip1=%d LEDs, Strip2=%d LEDs, Strip3=%d LEDs\n", 
-                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
-  Serial.printf("Pin assignments: D10=%d LEDs, D3=%d LEDs, D4=%d LEDs\n",
-                NUM_LEDS_1, NUM_LEDS_2, NUM_LEDS_3);
-  Serial.printf("WiFi: %s / %s\n", wifiSSID.c_str(), wifiPassword.c_str());
-  
-  // Initialize LED strips - Multi-pin configuration with alternate color orders
-  // Note: Some WS2812 strips use RGB instead of GRB color order
-  FastLED.addLeds<WS2812B, LED_PIN_1, GRB>(leds1, NUM_LEDS_1);  // Strip 1: D10 (GPIO18), 14 LEDs
-  FastLED.addLeds<WS2812B, LED_PIN_2, GRB>(leds2, NUM_LEDS_2);  // Strip 2: D3 (GPIO21), 8 LEDs
-  FastLED.addLeds<WS2812B, LED_PIN_3, GRB>(leds3, NUM_LEDS_3);  // Strip 3: D4 (GPIO6), 8 LEDs
-  
-  FastLED.setBrightness(ledBrightness);
-  
-  // Clear all LEDs first
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-  FastLED.show();
-  delay(500);
-  
-  // Test each strip individually for diagnostics
-  Serial.println("Testing strips individually...");
-  
-  // Test Strip 1 - Red
-  Serial.println("Testing Strip 1 (D10/GPIO18) - RED - 14 LEDs");
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Red);
-  FastLED.show();
-  delay(2000);
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-  FastLED.show();
-  delay(500);
-  
-  // Test Strip 2 - Green  
-  Serial.println("Testing Strip 2 (D3/GPIO21) - GREEN - 8 LEDs");
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Green);
-  FastLED.show();
-  delay(2000);
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-  FastLED.show();
-  delay(500);
-  
-  // Test Strip 3 - Blue
-  Serial.println("Testing Strip 3 (D4/GPIO6) - BLUE - 8 LEDs");
-  fill_solid(leds3, NUM_LEDS_3, CRGB::Blue);
-  FastLED.show();
-  delay(2000);
-  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-  FastLED.show();
-  delay(1000);
-  
-  Serial.println("Strip testing complete. Check which colors appeared.");
-  
-  // Optional status LED (if available)
+  // Set up status LED
   pinMode(STATUS_LED_PIN, OUTPUT);
-  digitalWrite(STATUS_LED_PIN, LOW);
+  setBuiltinLED(255, 0, 0); // Red during startup
   
-  // Startup LED effect
-  rainbow();
+  // Initialize LED strips with actual configured lengths
+  actualLeds1 = polyConfig.getStripLength(1);
+  actualLeds2 = polyConfig.getStripLength(2);
+  actualLeds3 = polyConfig.getStripLength(3);
   
-  // Initialize WiFi using stored credentials
-  Serial.printf("Connecting to WiFi: %s\n", wifiSSID.c_str());
+  Serial.printf("LED Strip Configuration:\n");
+  Serial.printf("  Strip 1 (D3): %d LEDs\n", actualLeds1);
+  Serial.printf("  Strip 2 (D4): %d LEDs (longer ribbon)\n", actualLeds2);
+  Serial.printf("  Strip 3 (D5): %d LEDs\n", actualLeds3);
+  
+  FastLED.addLeds<WS2812B, LED_PIN_1, GRB>(leds1, actualLeds1);
+  FastLED.addLeds<WS2812B, LED_PIN_2, GRB>(leds2, actualLeds2);
+  FastLED.addLeds<WS2812B, LED_PIN_3, GRB>(leds3, actualLeds3);
+  FastLED.setBrightness(polyConfig.getBrightness());
+  
+  // Load default colors if enabled
+  if (polyConfig.useDefaultColors()) {
+    loadDefaultColors();
+  } else {
+    // Turn off all LEDs
+    fill_solid(leds1, actualLeds1, CRGB::Black);
+    fill_solid(leds2, actualLeds2, CRGB::Black);
+    fill_solid(leds3, actualLeds3, CRGB::Black);
+  }
+  FastLED.show();
+  
+  // Setup WiFi
+  setupWiFi();
+  
+  // Setup UDP for device communication
+  udp.begin(polyConfig.getUdpPort());
+  Serial.printf("📡 UDP server started on port %d\n", polyConfig.getUdpPort());
+  
+  // Setup sACN UDP
+  if (polyConfig.isSacnEnabled()) {
+    sacnUdp.begin(SACN_PORT);
+    Serial.printf("🎭 sACN server started on port %d\n", SACN_PORT);
+    Serial.printf("🎭 sACN Universe: %d, DMX Address: %d\n", 
+                  polyConfig.getSacnUniverse(), polyConfig.getDmxAddress());
+  }
+  
+  // Setup web server
+  setupWebServer();
+  
+  // Start background tasks
+  xTaskCreatePinnedToCore(networkTask, "NetworkTask", 4096, NULL, 1, &networkTaskHandle, 0);
+  xTaskCreatePinnedToCore(ledTask, "LEDTask", 2048, NULL, 2, &ledTaskHandle, 1);
+  if (polyConfig.isSacnEnabled()) {
+    xTaskCreatePinnedToCore(sacnTask, "SacnTask", 3072, NULL, 3, &sacnTaskHandle, 0);
+  }
+  
+  setBuiltinLED(0, 255, 0); // Green when ready
+  Serial.println("✅ Enhanced Polyinoculator ready!");
+  Serial.printf("🌐 Device: %s (%s)\n", deviceLabel.c_str(), deviceId.c_str());
+  Serial.printf("📡 IP Address: %s\n", WiFi.localIP().toString().c_str());
+}
+
+void loop() {
+  // Main loop is minimal - most work is done in background tasks
+  delay(100);
+  
+  // Update battery status periodically
+  if (millis() - lastBatteryRead > BATTERY_READ_INTERVAL) {
+    updateBatteryStatus();
+    lastBatteryRead = millis();
+  }
+}
+
+void loadConfiguration() {
+  Serial.println("📝 Loading configuration...");
+  
+  if (!polyConfig.load()) {
+    Serial.println("⚠️ Using default configuration");
+  }
+  
+  config = polyConfig.getConfig();
+  
+  // Set device variables from config
+  deviceId = String(config.propId);
+  deviceLabel = String(config.deviceLabel);
+  sacnUniverse = config.sacnUniverse;
+  sacnStartAddress = config.dmxAddress;
+  fixtureNumber = config.fixtureNumber;
+  wifiSSID = String(config.wifiSSID);
+  wifiPassword = String(config.wifiPassword);
+  sacnEnabled = config.sacnEnabled;
+  ledBrightness = config.brightness;
+  
+  Serial.printf("✅ Configuration loaded - Device: %s (%s)\n", 
+                deviceLabel.c_str(), deviceId.c_str());
+}
+
+void saveConfiguration() {
+  Serial.println("💾 Saving configuration...");
+  if (polyConfig.save()) {
+    Serial.println("✅ Configuration saved");
+  } else {
+    Serial.println("❌ Failed to save configuration");
+  }
+}
+
+void setupWiFi() {
+  Serial.printf("🌐 Connecting to WiFi: %s\n", wifiSSID.c_str());
+  
   WiFi.mode(WIFI_STA);
   WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
   
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) { // 20 second timeout
-    delay(500);
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+    delay(1000);
     Serial.print(".");
+    setBuiltinLED(255, 255, 0); // Yellow during connection
+    delay(100);
+    setBuiltinLED(0, 0, 0);
     attempts++;
-    
-    // Breathing effect during WiFi connection - all strips
-    int brightness = (sin(attempts * 0.3) + 1) * 64;
-    fill_solid(leds1, NUM_LEDS_1, CRGB(0, 0, brightness));
-    fill_solid(leds2, NUM_LEDS_2, CRGB(0, 0, brightness));
-    fill_solid(leds3, NUM_LEDS_3, CRGB(0, 0, brightness));
-    FastLED.show();
   }
   
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
-    Serial.println("\nWiFi connected!");
-    Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("\n✅ WiFi connected: %s\n", WiFi.localIP().toString().c_str());
+    setBuiltinLED(0, 255, 0); // Green for connected
     
-    // Setup web server for configuration API
-    setupWebServer();
-    
-    // Initialize UDP for control commands
-    udp.begin(UDP_PORT);
-    Serial.printf("UDP server listening on port %d\n", UDP_PORT);
-    
-    // Initialize sACN receiver
-    initializeSACN();
-    
-    // Start mDNS
-    if (MDNS.begin(deviceId.c_str())) {
-      Serial.println("mDNS responder started");
-      MDNS.addService("polyinoculator", "udp", UDP_PORT);
-    }
-    
-    // Success LED pattern - light up all strips sequentially
-    for (int i = 0; i < NUM_LEDS_1; i++) {
-      leds1[i] = CRGB::Green;
-      FastLED.show();
-      delay(50);
-    }
-    for (int i = 0; i < NUM_LEDS_2; i++) {
-      leds2[i] = CRGB::Green;
-      FastLED.show();
-      delay(50);
-    }
-    for (int i = 0; i < NUM_LEDS_3; i++) {
-      leds3[i] = CRGB::Green;
-      FastLED.show();
-      delay(50);
-    }
-    delay(500);
-    fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-    fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-    fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-    FastLED.show();
-    
-    digitalWrite(STATUS_LED_PIN, HIGH); // Status LED on when connected
-  } else {
-    Serial.println("\nFailed to connect to WiFi");
-    // Error LED pattern - flash all strips red
-    for (int i = 0; i < 5; i++) {
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Red);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Red);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Red);
-      FastLED.show();
-      delay(200);
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-      FastLED.show();
-      delay(200);
-    }
-  }
-  
-  Serial.println("Setup complete!");
-}
-
-// ============================================================================
-// sACN E1.31 Implementation
-// ============================================================================
-
-// Initialize sACN receiver
-void initializeSACN() {
-  if (!sacnEnabled) {
-    Serial.println("sACN disabled in configuration");
-    return;
-  }
-  
-  Serial.printf("Initializing sACN: Universe %d, Address %d\n", sacnUniverse, sacnStartAddress);
-  
-  // Calculate multicast address for our universe
-  String multicastAddr = getMulticastAddress(sacnUniverse);
-  IPAddress multicastIP;
-  if (!multicastIP.fromString(multicastAddr)) {
-    Serial.printf("❌ Invalid multicast address: %s\n", multicastAddr.c_str());
-    return;
-  }
-  
-  // Start sACN UDP socket
-  if (sacnUdp.beginMulticast(multicastIP, SACN_PORT)) {
-    Serial.printf("✅ sACN receiver started: %s:%d\n", multicastAddr.c_str(), SACN_PORT);
-  } else {
-    Serial.println("❌ Failed to start sACN receiver");
-    sacnEnabled = false;
-  }
-}
-
-// Handle incoming sACN packets
-void handleSACNPackets() {
-  if (!sacnEnabled || !wifiConnected) return;
-  
-  int packetSize = sacnUdp.parsePacket();
-  if (packetSize > 0) {
-    uint8_t packet[E131_PACKET_SIZE];
-    int bytesRead = sacnUdp.read(packet, min(packetSize, E131_PACKET_SIZE));
-    
-    if (bytesRead > 0) {
-      if (processSACNPacket(packet, bytesRead)) {
-        lastSacnPacket = millis();
-        sacnActive = true;
-        sacnPriority = true;  // Enable sACN priority when receiving data
-      }
-    }
-  }
-  
-  // Disable sACN priority if no packets received for 30 seconds (consistent with tricorder)
-  if (sacnActive && (millis() - lastSacnPacket > 30000)) {
-    sacnActive = false;
-    sacnPriority = false;
-    Serial.println("sACN timeout (30s) - switching to UDP control");
-  }
-}
-
-// Process received sACN E1.31 packet
-bool processSACNPacket(uint8_t* packet, size_t length) {
-  // Validate minimum packet size
-  if (length < E131_DATA_OFFSET) {
-    return false;
-  }
-  
-  // Check ACN packet identifier
-  if (memcmp(packet + 4, ACN_PACKET_IDENTIFIER, 12) != 0) {
-    return false;
-  }
-  
-  // Extract universe (bytes 113-114, big endian)
-  uint16_t universe = (packet[E131_UNIVERSE_OFFSET] << 8) | packet[E131_UNIVERSE_OFFSET + 1];
-  
-  // Check if this packet is for our universe
-  if (universe != sacnUniverse) {
-    return false;
-  }
-  
-  // Extract sequence number for duplicate detection
-  uint8_t sequence = packet[111];
-  
-  // Simple sequence checking (handles wrap-around)
-  if (sequence != sacnSequence + 1 && sequence != 0) {
-    // Packet out of order or duplicate - still process but note it
-    // In production, you might want more sophisticated duplicate detection
-  }
-  sacnSequence = sequence;
-  
-  // Extract DMX data (starts at byte 126)
-  uint8_t* dmxData = packet + E131_DATA_OFFSET;
-  size_t dmxLength = length - E131_DATA_OFFSET;
-  
-  // Copy DMX data and update LEDs
-  if (dmxLength >= sacnStartAddress + (TOTAL_LEDS * 3)) {  // RGB = 3 channels per LED
-    memcpy(lastSacnData, dmxData, min(dmxLength, (size_t)512));
-    updateLEDsFromDMX(dmxData);
-    return true;
-  }
-  
-  return false;
-}
-
-// Update LEDs based on DMX data
-void updateLEDsFromDMX(uint8_t* dmxData) {
-  if (!sacnEnabled || !sacnPriority) return;
-  
-  // Calculate starting index in DMX data (DMX is 1-based, arrays are 0-based)
-  int dmxIndex = sacnStartAddress - 1;
-  
-  // Update LEDs for each strip (RGB: 3 channels per LED)
-  // Strip 1: 7 LEDs
-  for (int i = 0; i < NUM_LEDS_1; i++) {
-    int r = dmxData[dmxIndex + (i * 3) + 0];
-    int g = dmxData[dmxIndex + (i * 3) + 1];
-    int b = dmxData[dmxIndex + (i * 3) + 2];
-    leds1[i] = CRGB(r, g, b);
-  }
-  dmxIndex += NUM_LEDS_1 * 3;
-  
-  // Strip 2: 4 LEDs
-  for (int i = 0; i < NUM_LEDS_2; i++) {
-    int r = dmxData[dmxIndex + (i * 3) + 0];
-    int g = dmxData[dmxIndex + (i * 3) + 1];
-    int b = dmxData[dmxIndex + (i * 3) + 2];
-    leds2[i] = CRGB(r, g, b);
-  }
-  dmxIndex += NUM_LEDS_2 * 3;
-  
-  // Strip 3: 4 LEDs
-  for (int i = 0; i < NUM_LEDS_3; i++) {
-    int r = dmxData[dmxIndex + (i * 3) + 0];
-    int g = dmxData[dmxIndex + (i * 3) + 1];
-    int b = dmxData[dmxIndex + (i * 3) + 2];
-    leds3[i] = CRGB(r, g, b);
-  }
-  
-  // Apply brightness and show
-  FastLED.setBrightness(ledBrightness);
-  FastLED.show();
-}
-
-// Set sACN priority mode
-void setSACNPriority(bool enabled) {
-  sacnPriority = enabled;
-  if (enabled) {
-    Serial.println("sACN priority enabled - ignoring UDP LED commands");
-  } else {
-    Serial.println("sACN priority disabled - accepting UDP LED commands");
-  }
-}
-
-// Calculate multicast address for sACN universe
-String getMulticastAddress(int universe) {
-  // sACN uses multicast addresses 239.255.0.1 through 239.255.255.255
-  // Universe 1 = 239.255.0.1, Universe 2 = 239.255.0.2, etc.
-  int subnet = (universe >> 8) & 0xFF;
-  int host = universe & 0xFF;
-  
-  if (subnet == 0) {
-    subnet = 0;
-    host = universe;
-  }
-  
-  return String("239.255.") + String(subnet) + "." + String(host);
-}
-
-void loop() {
-  // Handle web server requests
-  if (wifiConnected) {
-    webServer.handleClient();
-    
-    // Handle sACN packets (high priority for lighting)
-    handleSACNPackets();
-  }
-  
-  // Handle UDP control commands
-  handleUDPCommands();
-  
-  // Send periodic status
-  static unsigned long lastStatus = 0;
-  if (millis() - lastStatus > STATUS_INTERVAL) {
-    sendPeriodicStatus();
-    lastStatus = millis();
-  }
-  
-  // Check WiFi connection
-  static bool lastWifiStatus = false;
-  bool currentWifiStatus = (WiFi.status() == WL_CONNECTED);
-  
-  if (currentWifiStatus != lastWifiStatus) {
-    wifiConnected = currentWifiStatus;
-    digitalWrite(STATUS_LED_PIN, currentWifiStatus ? HIGH : LOW);
-    
-    if (!currentWifiStatus) {
-      Serial.println("WiFi disconnected!");
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Red);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Red);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Red);
-      FastLED.show();
-    } else {
-      Serial.println("WiFi reconnected!");
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Green);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Green);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Green);
-      FastLED.show();
-      delay(500);
-      fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-      fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-      fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-      FastLED.show();
-    }
-    lastWifiStatus = currentWifiStatus;
-  }
-  
-  delay(1); // Small delay to prevent watchdog issues
-}
-
-void handleUDPCommands() {
-  int packetSize = udp.parsePacket();
-  if (packetSize) {
-    char incomingPacket[255];
-    int len = udp.read(incomingPacket, 255);
-    if (len > 0) {
-      incomingPacket[len] = 0;
-    }
-    
-    processNetworkCommand(String(incomingPacket));
-  }
-}
-
-void processNetworkCommand(String jsonCommand) {
-  Serial.printf("Received JSON: %s\n", jsonCommand.c_str());
-  
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, jsonCommand);
-  
-  if (!error) {
-    String action = doc["action"];
-    String commandId = doc["commandId"];
-    
-    Serial.printf("Parsed action='%s', commandId='%s'\n", action.c_str(), commandId.c_str());
-    
-    if (action == "discovery") {
-      JsonDocument response;
-      response["commandId"] = commandId;
-      response["deviceId"] = deviceId;
-      response["type"] = "polyinoculator";
-      response["firmwareVersion"] = firmwareVersion;
-      response["ipAddress"] = WiFi.localIP().toString();
-      response["numLeds"] = TOTAL_LEDS;
-      response["numLeds1"] = NUM_LEDS_1;
-      response["numLeds2"] = NUM_LEDS_2;
-      response["numLeds3"] = NUM_LEDS_3;
-      response["sacnUniverse"] = sacnUniverse;
-      
-      String responseStr;
-      serializeJson(response, responseStr);
-      udp.beginPacket(udp.remoteIP(), udp.remotePort());
-      udp.print(responseStr);
-      udp.endPacket();
-    }
-    else if (action == "set_led_color") {
-      int r = doc["r"];
-      int g = doc["g"];
-      int b = doc["b"];
-      setAllLEDColor(r, g, b);
-      sendResponse(commandId, "LED color set");
-    }
-    else if (action == "set_brightness") {
-      int brightness = doc["brightness"];
-      setLEDBrightness(brightness);
-      sendResponse(commandId, "Brightness set");
-    }
-    else if (action == "set_individual_led") {
-      int ledIndex = doc["ledIndex"];
-      int r = doc["r"];
-      int g = doc["g"];
-      int b = doc["b"];
-      setIndividualLED(ledIndex, r, g, b);
-      sendResponse(commandId, "Individual LED set");
-    }
-    else if (action == "set_leds_array") {
-      // Command for setting multiple LEDs at once (used by SACN)
-      if (doc.containsKey("leds") && doc["leds"].is<JsonArray>()) {
-        JsonArray ledsArray = doc["leds"];
-        for (int i = 0; i < ledsArray.size() && i < TOTAL_LEDS; i++) {
-          if (ledsArray[i].is<JsonArray>() && ledsArray[i].size() >= 3) {
-            int r = ledsArray[i][0];
-            int g = ledsArray[i][1];
-            int b = ledsArray[i][2];
-            setIndividualLED(i, r, g, b); // Use our function that handles strip mapping
-          }
-        }
-        sendResponse(commandId, "LED array set");
-      } else {
-        sendResponse(commandId, "Invalid LED array format");
-      }
-    }
-    else if (action == "rainbow") {
-      rainbow();
-      sendResponse(commandId, "Rainbow effect activated");
-    }
-    else if (action == "scanner") {
-      int r = doc.containsKey("r") ? doc["r"] : 255;
-      int g = doc.containsKey("g") ? doc["g"] : 0;
-      int b = doc.containsKey("b") ? doc["b"] : 0;
-      scannerEffect(r, g, b);
-      sendResponse(commandId, "Scanner effect activated");
-    }
-    else if (action == "pulse") {
-      int r = doc.containsKey("r") ? doc["r"] : 255;
-      int g = doc.containsKey("g") ? doc["g"] : 255;
-      int b = doc.containsKey("b") ? doc["b"] : 255;
-      pulseEffect(r, g, b);
-      sendResponse(commandId, "Pulse effect activated");
-    }
-    else if (action == "toggle_sacn") {
-      sacnEnabled = !sacnEnabled;
-      sendResponse(commandId, sacnEnabled ? "SACN enabled" : "SACN disabled");
-    }
-    else if (action == "status") {
-      sendStatus(commandId);
-    }
-    else if (action == "save_current_as_default") {
-      // Save current LED colors as default startup colors
-      uint8_t red[30], green[30], blue[30];
-      int index = 0;
-      
-      // Copy strip 1 colors
-      for (int i = 0; i < NUM_LEDS_1 && index < 30; i++, index++) {
-        red[index] = leds1[i].r;
-        green[index] = leds1[i].g;
-        blue[index] = leds1[i].b;
-      }
-      
-      // Copy strip 2 colors
-      for (int i = 0; i < NUM_LEDS_2 && index < 30; i++, index++) {
-        red[index] = leds2[i].r;
-        green[index] = leds2[i].g;
-        blue[index] = leds2[i].b;
-      }
-      
-      // Copy strip 3 colors
-      for (int i = 0; i < NUM_LEDS_3 && index < 30; i++, index++) {
-        red[index] = leds3[i].r;
-        green[index] = leds3[i].g;
-        blue[index] = leds3[i].b;
-      }
-      
-      propConfig.setDefaultColors(red, green, blue, index);
-      propConfig.setUseDefaultColors(true);
-      
-      sendResponse(commandId, "Current LED colors saved as default startup colors");
-    }
-  }
-}
-
-void setAllLEDColor(int r, int g, int b) {
-  // Check if sACN has priority - if so, ignore UDP LED commands
-  if (sacnPriority && sacnActive) {
-    Serial.println("Ignoring UDP LED command - sACN active");
-    return;
-  }
-  
-  currentColor = CRGB(r, g, b);
-  fill_solid(leds1, NUM_LEDS_1, currentColor);
-  fill_solid(leds2, NUM_LEDS_2, currentColor);
-  fill_solid(leds3, NUM_LEDS_3, currentColor);
-  FastLED.show();
-  Serial.printf("All LED strips set to R:%d G:%d B:%d\n", r, g, b);
-}
-
-void setStripColor(int stripNum, int r, int g, int b) {
-  // Check if sACN has priority - if so, ignore UDP LED commands
-  if (sacnPriority && sacnActive) {
-    Serial.println("Ignoring UDP strip color command - sACN active");
-    return;
-  }
-  
-  CRGB color = CRGB(r, g, b);
-  switch(stripNum) {
-    case 1:
-      fill_solid(leds1, NUM_LEDS_1, color);
-      break;
-    case 2:
-      fill_solid(leds2, NUM_LEDS_2, color);
-      break;
-    case 3:
-      fill_solid(leds3, NUM_LEDS_3, color);
-      break;
-    default:
-      Serial.printf("Invalid strip number: %d\n", stripNum);
-      return;
-  }
-  FastLED.show();
-  Serial.printf("Strip %d set to R:%d G:%d B:%d\n", stripNum, r, g, b);
-}
-
-void setLEDBrightness(int brightness) {
-  ledBrightness = constrain(brightness, 0, 255);
-  FastLED.setBrightness(ledBrightness);
-  FastLED.show();
-  Serial.printf("LED brightness set to %d\n", ledBrightness);
-}
-
-void setIndividualLED(int ledIndex, int r, int g, int b) {
-  // Map global LED index to strip and local index
-  if (ledIndex >= 0 && ledIndex < TOTAL_LEDS) {
-    CRGB color = CRGB(r, g, b);
-    
-    if (ledIndex < NUM_LEDS_1) {
-      // Strip 1: LEDs 0-6
-      leds1[ledIndex] = color;
-    } else if (ledIndex < NUM_LEDS_1 + NUM_LEDS_2) {
-      // Strip 2: LEDs 7-10
-      leds2[ledIndex - NUM_LEDS_1] = color;
-    } else {
-      // Strip 3: LEDs 11-14
-      leds3[ledIndex - NUM_LEDS_1 - NUM_LEDS_2] = color;
-    }
-    
-    FastLED.show();
-    Serial.printf("LED %d set to R:%d G:%d B:%d\n", ledIndex, r, g, b);
-  }
-}
-
-void rainbow() {
-  for (int j = 0; j < 256; j++) {
-    // Strip 1: 7 LEDs
-    for (int i = 0; i < NUM_LEDS_1; i++) {
-      leds1[i] = CHSV(((i * 256 / NUM_LEDS_1) + j) & 255, 255, 255);
-    }
-    // Strip 2: 4 LEDs
-    for (int i = 0; i < NUM_LEDS_2; i++) {
-      leds2[i] = CHSV(((i * 256 / NUM_LEDS_2) + j + 85) & 255, 255, 255); // Offset hue
-    }
-    // Strip 3: 4 LEDs
-    for (int i = 0; i < NUM_LEDS_3; i++) {
-      leds3[i] = CHSV(((i * 256 / NUM_LEDS_3) + j + 170) & 255, 255, 255); // Different offset
-    }
-    FastLED.show();
-    delay(10);
-  }
-}
-
-void scannerEffect(int r, int g, int b, int delayMs) {
-  CRGB color = CRGB(r, g, b);
-  
-  // Clear all strips
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-  
-  // Scan through Strip 1 (7 LEDs)
-  for (int i = 0; i < NUM_LEDS_1; i++) {
-    fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-    leds1[i] = color;
-    FastLED.show();
-    delay(delayMs);
-  }
-  
-  // Scan through Strip 2 (4 LEDs)
-  for (int i = 0; i < NUM_LEDS_2; i++) {
-    fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-    leds2[i] = color;
-    FastLED.show();
-    delay(delayMs);
-  }
-  
-  // Scan through Strip 3 (4 LEDs)
-  for (int i = 0; i < NUM_LEDS_3; i++) {
-    fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-    leds3[i] = color;
-    FastLED.show();
-    delay(delayMs);
-  }
-  
-  // Clear all again
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-  FastLED.show();
-}
-
-void pulseEffect(int r, int g, int b, int duration) {
-  CRGB color = CRGB(r, g, b);
-  unsigned long startTime = millis();
-  
-  while (millis() - startTime < duration) {
-    float progress = (millis() - startTime) / (float)duration;
-    float brightness = (sin(progress * 2 * PI) + 1) / 2; // 0 to 1
-    
-    CRGB dimmedColor = color;
-    dimmedColor.nscale8(255 * brightness);
-    
-    fill_solid(leds1, NUM_LEDS_1, dimmedColor);
-    fill_solid(leds2, NUM_LEDS_2, dimmedColor);
-    fill_solid(leds3, NUM_LEDS_3, dimmedColor);
-    FastLED.show();
-    delay(20);
-  }
-  
-  fill_solid(leds1, NUM_LEDS_1, CRGB::Black);
-  fill_solid(leds2, NUM_LEDS_2, CRGB::Black);
-  fill_solid(leds3, NUM_LEDS_3, CRGB::Black);
-  FastLED.show();
-}
-
-void sendResponse(String commandId, String result) {
-  JsonDocument doc;
-  doc["commandId"] = commandId;
-  doc["result"] = result;
-  doc["timestamp"] = millis();
-  doc["deviceId"] = deviceId;
-  
-  String response;
-  serializeJson(doc, response);
-  
-  udp.beginPacket(udp.remoteIP(), udp.remotePort());
-  udp.write((const uint8_t*)response.c_str(), response.length());
-  udp.endPacket();
-}
-
-void sendStatus(String commandId) {
-  JsonDocument doc;
-  doc["commandId"] = commandId;
-  doc["deviceId"] = deviceId;
-  doc["firmwareVersion"] = firmwareVersion;
-  doc["wifiConnected"] = wifiConnected;
-  doc["ipAddress"] = WiFi.localIP().toString();
-  doc["freeHeap"] = ESP.getFreeHeap();
-  doc["uptime"] = millis();
-  doc["numLeds"] = TOTAL_LEDS;
-  doc["brightness"] = ledBrightness;
-  doc["sacnEnabled"] = sacnEnabled;
-  doc["sacnUniverse"] = sacnUniverse;
-  doc["fixtureNumber"] = fixtureNumber;
-  
-  String response;
-  serializeJson(doc, response);
-  
-  udp.beginPacket(udp.remoteIP(), udp.remotePort());
-  udp.write((const uint8_t*)response.c_str(), response.length());
-  udp.endPacket();
-}
-
-void sendPeriodicStatus() {
-  JsonDocument doc;
-  doc["deviceId"] = deviceId;
-  doc["type"] = "polyinoculator";
-  doc["firmwareVersion"] = firmwareVersion;
-  doc["wifiConnected"] = wifiConnected;
-  doc["deviceLabel"] = deviceLabel;
-  doc["ipAddress"] = WiFi.localIP().toString();
-  doc["freeHeap"] = ESP.getFreeHeap();
-  doc["uptime"] = millis();
-  doc["numLeds"] = totalLEDs;
-  doc["brightness"] = ledBrightness;
-  doc["sacnEnabled"] = sacnEnabled;
-  doc["sacnUniverse"] = sacnUniverse;
-  doc["dmxStartAddress"] = sacnStartAddress;
-  doc["fixtureNumber"] = fixtureNumber;
-  doc["timestamp"] = millis();
-  
-  String statusMsg;
-  serializeJson(doc, statusMsg);
-  
-  // Broadcast to server
-  IPAddress localIP = WiFi.localIP();
-  IPAddress serverIP(localIP[0], localIP[1], localIP[2], 24);
-  
-  udp.beginPacket(serverIP, UDP_PORT);
-  udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
-  udp.endPacket();
-}
-
-// Configuration management functions
-void loadConfiguration() {
-  if (propConfig.loadConfig(config)) {
-    deviceId = config.deviceLabel.substring(0, config.deviceLabel.indexOf('_')) + "_" + String(random(1000, 9999));
-    deviceLabel = config.deviceLabel;
-    sacnUniverse = config.sacnUniverse;
-    sacnStartAddress = config.dmxStartAddress;
-    totalLEDs = config.numLeds;
-    fixtureNumber = config.fixtureNumber;
-    ledBrightness = config.brightness;
-    wifiSSID = config.wifiSSID;
-    wifiPassword = config.wifiPassword;
-    
-    if (config.firstBoot) {
-      Serial.println("First boot detected - using defaults");
-      propConfig.setFirstBoot(false);
+    // Setup mDNS
+    if (MDNS.begin(config.hostname)) {
+      Serial.printf("📡 mDNS started: %s.local\n", config.hostname);
     }
   } else {
-    Serial.println("Failed to load config - using defaults");
-    // Set defaults
-    deviceId = "POLYINOCULATOR_" + String(random(1000, 9999));
-    deviceLabel = "Polyinoculator " + String(random(100, 999));
-    sacnUniverse = 1;
-    sacnStartAddress = 1;
-    totalLEDs = TOTAL_LEDS;
-    fixtureNumber = 2;  // Default to 2 for polyinoculators
-    ledBrightness = 128;
-    wifiSSID = "Rigging Electric";
-    wifiPassword = "academy123";
-    
-    // Save defaults
-    config.deviceLabel = deviceLabel;
-    config.sacnUniverse = sacnUniverse;
-    config.dmxStartAddress = sacnStartAddress;
-    config.numLeds = totalLEDs;
-    config.brightness = ledBrightness;
-    config.wifiSSID = wifiSSID;
-    config.wifiPassword = wifiPassword;
-    config.deviceType = "polyinoculator";
-    config.fixtureNumber = fixtureNumber;
-    config.firstBoot = false;
-    propConfig.saveConfig(config);
-  }
-  
-  Serial.println("Configuration loaded:");
-  propConfig.printConfig();
-  
-  // Apply default colors if enabled
-  if (propConfig.getUseDefaultColors()) {
-    uint8_t red[30], green[30], blue[30];
-    if (propConfig.getDefaultColors(red, green, blue, 30)) {
-      int index = 0;
-      
-      // Apply to strip 1
-      for (int i = 0; i < NUM_LEDS_1 && index < 30; i++, index++) {
-        leds1[i] = CRGB(red[index], green[index], blue[index]);
-      }
-      
-      // Apply to strip 2
-      for (int i = 0; i < NUM_LEDS_2 && index < 30; i++, index++) {
-        leds2[i] = CRGB(red[index], green[index], blue[index]);
-      }
-      
-      // Apply to strip 3
-      for (int i = 0; i < NUM_LEDS_3 && index < 30; i++, index++) {
-        leds3[i] = CRGB(red[index], green[index], blue[index]);
-      }
-      
-      FastLED.show();
-      Serial.println("Applied default LED colors from configuration");
-    }
+    Serial.println("\n❌ WiFi connection failed");
+    setBuiltinLED(255, 0, 0); // Red for failed
   }
 }
 
 void setupWebServer() {
-  // Configuration API endpoints
-  webServer.on("/api/config", HTTP_GET, handleGetConfig);
-  webServer.on("/api/config", HTTP_POST, handleSetConfig);
-  webServer.on("/api/factory-reset", HTTP_POST, handleFactoryReset);
+  // Root page
+  webServer.on("/", HTTP_GET, []() {
+    String html = "<h1>Enhanced Polyinoculator</h1>";
+    html += "<p>Device: " + deviceLabel + " (" + deviceId + ")</p>";
+    html += "<p>Firmware: " + firmwareVersion + "</p>";
+    html += "<p>Strips: " + String(actualLeds1) + " + " + String(actualLeds2) + " + " + String(actualLeds3) + " LEDs</p>";
+    html += "<p>WiFi: " + WiFi.localIP().toString() + "</p>";
+    html += "<p>sACN: Universe " + String(sacnUniverse) + ", Address " + String(sacnStartAddress) + "</p>";
+    webServer.send(200, "text/html", html);
+  });
   
-  // CORS headers for web interface
-  webServer.enableCORS(true);
+  // Status endpoint
+  webServer.on("/status", HTTP_GET, []() {
+    DynamicJsonDocument doc(1024);
+    doc["deviceId"] = deviceId;
+    doc["deviceLabel"] = deviceLabel;
+    doc["firmwareVersion"] = firmwareVersion;
+    doc["wifiConnected"] = wifiConnected;
+    doc["ipAddress"] = WiFi.localIP().toString();
+    doc["sacnUniverse"] = sacnUniverse;
+    doc["sacnAddress"] = sacnStartAddress;
+    doc["strip1LEDs"] = actualLeds1;
+    doc["strip2LEDs"] = actualLeds2;
+    doc["strip3LEDs"] = actualLeds3;
+    doc["batteryVoltage"] = batteryVoltage;
+    doc["batteryPercentage"] = batteryPercentage;
+    doc["batteryStatus"] = batteryStatus;
+    
+    String response;
+    serializeJson(doc, response);
+    webServer.send(200, "application/json", response);
+  });
   
   webServer.begin();
-  Serial.printf("Web server started on port %d\n", WEB_PORT);
+  Serial.printf("🌐 Web server started on port %d\n", WEB_PORT);
 }
 
-void handleGetConfig() {
-  JsonDocument doc;
+void networkTask(void* parameter) {
+  while (true) {
+    if (wifiConnected) {
+      // Handle UDP packets
+      handleUDPPacket();
+      
+      // Send periodic status
+      if (millis() - lastStatusSend > STATUS_INTERVAL) {
+        sendStatus();
+        lastStatusSend = millis();
+      }
+      
+      // Server discovery
+      if (millis() - lastServerDiscovery > SERVER_DISCOVERY_INTERVAL) {
+        serverDiscovery();
+        lastServerDiscovery = millis();
+      }
+      
+      // Handle web server
+      webServer.handleClient();
+    }
+    
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+  }
+}
+
+void ledTask(void* parameter) {
+  while (true) {
+    updateLEDs();
+    vTaskDelay(20 / portTICK_PERIOD_MS); // 50Hz update rate
+  }
+}
+
+void sacnTask(void* parameter) {
+  while (true) {
+    if (wifiConnected && sacnEnabled) {
+      handleSacnPacket();
+      
+      // Check for sACN timeout
+      if (sacnActive && (millis() - lastSacnPacket > SACN_TIMEOUT)) {
+        Serial.println("⏰ sACN timeout - returning to UDP control");
+        sacnActive = false;
+        sacnPriority = false;
+      }
+    }
+    
+    vTaskDelay(5 / portTICK_PERIOD_MS);
+  }
+}
+
+void handleUDPPacket() {
+  int packetSize = udp.parsePacket();
+  if (packetSize) {
+    char buffer[512];
+    int len = udp.read(buffer, sizeof(buffer) - 1);
+    buffer[len] = '\0';
+    
+    // Parse JSON command
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, buffer);
+    
+    if (error) {
+      Serial.printf("❌ JSON parsing failed: %s\n", error.c_str());
+      return;
+    }
+    
+    String action = doc["action"];
+    String commandId = doc["commandId"] | "";
+    
+    Serial.printf("📨 Received command: %s\n", action.c_str());
+    
+    if (action == "set_led_color") {
+      if (!sacnPriority) { // Only accept UDP commands when not in sACN priority mode
+        uint8_t r = doc["red"] | 0;
+        uint8_t g = doc["green"] | 0;
+        uint8_t b = doc["blue"] | 0;
+        int strip = doc["strip"] | 0; // 0 = all strips, 1-3 = specific strip
+        
+        CRGB color = CRGB(r, g, b);
+        
+        if (strip == 0 || strip == 1) fill_solid(leds1, actualLeds1, color);
+        if (strip == 0 || strip == 2) fill_solid(leds2, actualLeds2, color);
+        if (strip == 0 || strip == 3) fill_solid(leds3, actualLeds3, color);
+        
+        sendResponse(commandId, "LED color set");
+      }
+    }
+    else if (action == "set_brightness") {
+      uint8_t brightness = doc["brightness"] | 255;
+      FastLED.setBrightness(brightness);
+      polyConfig.setBrightness(brightness);
+      sendResponse(commandId, "Brightness set to " + String(brightness));
+    }
+    else if (action == "save_current_as_default") {
+      saveCurrentAsDefault();
+      sendResponse(commandId, "Current LED colors saved as default");
+    }
+    else if (action == "set_sacn_address_by_group") {
+      int groupNumber = doc["group"] | 1;
+      handleSetSacnAddressByGroup(groupNumber);
+      sendResponse(commandId, "sACN address set for group " + String(groupNumber));
+    }
+    else if (action == "ota_update") {
+      String firmwareUrl = "";
+      if (doc["parameters"].is<JsonObject>() && doc["parameters"]["firmware_url"].is<String>()) {
+        firmwareUrl = doc["parameters"]["firmware_url"].as<String>();
+      }
+      
+      if (firmwareUrl.length() > 0) {
+        Serial.printf("🔄 Starting OTA update from: %s\n", firmwareUrl.c_str());
+        sendResponse(commandId, "OTA update started");
+        handleOTAUpdate(firmwareUrl, commandId);
+      } else {
+        Serial.println("❌ OTA update failed: No firmware URL provided");
+        sendResponse(commandId, "OTA update failed: No firmware URL provided");
+      }
+    }
+    else if (action == "server_discovery_response") {
+      serverIP = doc["server_ip"] | "";
+      serverPort = doc["server_port"] | 8888;
+      Serial.printf("🔍 Server discovered: %s:%d\n", serverIP.c_str(), serverPort);
+    }
+  }
+}
+
+void handleSacnPacket() {
+  int packetSize = sacnUdp.parsePacket();
+  if (packetSize >= E131_PACKET_SIZE) {
+    uint8_t buffer[E131_PACKET_SIZE];
+    sacnUdp.read(buffer, E131_PACKET_SIZE);
+    
+    // Verify E1.31 packet
+    if (memcmp(buffer + 4, ACN_PACKET_IDENTIFIER, 12) == 0) {
+      uint16_t universe = (buffer[E131_UNIVERSE_OFFSET] << 8) | buffer[E131_UNIVERSE_OFFSET + 1];
+      
+      if (universe == sacnUniverse) {
+        uint8_t sequence = buffer[111];
+        uint8_t* dmxData = &buffer[E131_DATA_OFFSET];
+        
+        // Update sACN state
+        lastSacnPacket = millis();
+        sacnActive = true;
+        sacnPriority = true;
+        sacnSequence = sequence;
+        
+        // Copy DMX data
+        memcpy(lastSacnData, dmxData, 512);
+        
+        // Map DMX channels to LED strips
+        int baseAddress = sacnStartAddress - 1; // DMX is 1-based, array is 0-based
+        
+        // Strip 1 (RGB per LED)
+        for (int i = 0; i < actualLeds1 && (baseAddress + i * 3 + 2) < 512; i++) {
+          leds1[i] = CRGB(
+            dmxData[baseAddress + i * 3],     // Red
+            dmxData[baseAddress + i * 3 + 1], // Green
+            dmxData[baseAddress + i * 3 + 2]  // Blue
+          );
+        }
+        
+        // Strip 2 (RGB per LED) - starts after Strip 1
+        int strip2Base = baseAddress + (actualLeds1 * 3);
+        for (int i = 0; i < actualLeds2 && (strip2Base + i * 3 + 2) < 512; i++) {
+          leds2[i] = CRGB(
+            dmxData[strip2Base + i * 3],     // Red
+            dmxData[strip2Base + i * 3 + 1], // Green
+            dmxData[strip2Base + i * 3 + 2]  // Blue
+          );
+        }
+        
+        // Strip 3 (RGB per LED) - starts after Strip 2
+        int strip3Base = strip2Base + (actualLeds2 * 3);
+        for (int i = 0; i < actualLeds3 && (strip3Base + i * 3 + 2) < 512; i++) {
+          leds3[i] = CRGB(
+            dmxData[strip3Base + i * 3],     // Red
+            dmxData[strip3Base + i * 3 + 1], // Green
+            dmxData[strip3Base + i * 3 + 2]  // Blue
+          );
+        }
+      }
+    }
+  }
+}
+
+void updateLEDs() {
+  FastLED.show();
+}
+
+void sendStatus() {
+  if (!wifiConnected || serverIP.length() == 0) return;
+  
+  DynamicJsonDocument doc(1024);
   doc["deviceId"] = deviceId;
+  doc["type"] = "polyinoculator";
   doc["deviceLabel"] = deviceLabel;
-  doc["deviceType"] = "polyinoculator";
+  doc["fixtureNumber"] = fixtureNumber;
   doc["firmwareVersion"] = firmwareVersion;
-  doc["sacnUniverse"] = sacnUniverse;
-  doc["dmxStartAddress"] = sacnStartAddress;
-  doc["numLeds"] = totalLEDs;
-  doc["brightness"] = ledBrightness;
-  doc["wifiSSID"] = wifiSSID;
-  doc["online"] = true;
+  doc["wifiConnected"] = wifiConnected;
   doc["ipAddress"] = WiFi.localIP().toString();
-  doc["uptime"] = millis();
   doc["freeHeap"] = ESP.getFreeHeap();
+  doc["uptime"] = millis();
+  doc["sacnUniverse"] = sacnUniverse;
+  doc["sacnAddress"] = sacnStartAddress;
+  doc["sacnActive"] = sacnActive;
+  doc["strip1LEDs"] = actualLeds1;
+  doc["strip2LEDs"] = actualLeds2;
+  doc["strip3LEDs"] = actualLeds3;
+  doc["totalLEDs"] = actualLeds1 + actualLeds2 + actualLeds3;
+  doc["batteryVoltage"] = batteryVoltage;
+  doc["batteryPercentage"] = batteryPercentage;
+  doc["batteryStatus"] = batteryStatus;
+  doc["timestamp"] = millis();
+  
+  String status;
+  serializeJson(doc, status);
+  
+  udp.beginPacket(serverIP.c_str(), serverPort);
+  udp.write((const uint8_t*)status.c_str(), status.length());
+  udp.endPacket();
+}
+
+void serverDiscovery() {
+  DynamicJsonDocument doc(256);
+  doc["deviceId"] = deviceId;
+  doc["action"] = "server_discovery";
+  doc["timestamp"] = millis();
+  
+  String message;
+  serializeJson(doc, message);
+  
+  // Broadcast discovery message
+  udp.beginPacket("255.255.255.255", UDP_PORT);
+  udp.write((const uint8_t*)message.c_str(), message.length());
+  udp.endPacket();
+}
+
+void sendResponse(String commandId, String message) {
+  if (!wifiConnected || serverIP.length() == 0 || commandId.length() == 0) return;
+  
+  DynamicJsonDocument doc(512);
+  doc["deviceId"] = deviceId;
+  doc["commandId"] = commandId;
+  doc["response"] = message;
+  doc["timestamp"] = millis();
   
   String response;
   serializeJson(doc, response);
-  webServer.send(200, "application/json", response);
+  
+  udp.beginPacket(serverIP.c_str(), serverPort);
+  udp.write((const uint8_t*)response.c_str(), response.length());
+  udp.endPacket();
 }
 
-void handleSetConfig() {
-  if (!webServer.hasArg("plain")) {
-    webServer.send(400, "application/json", "{\"error\":\"No JSON data\"}");
-    return;
-  }
-  
-  String body = webServer.arg("plain");
-  JsonDocument doc;
-  
-  if (deserializeJson(doc, body) != DeserializationError::Ok) {
-    webServer.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-    return;
-  }
-  
-  bool configChanged = false;
-  
-  // Update configuration
-  if (doc.containsKey("deviceLabel")) {
-    String newLabel = doc["deviceLabel"].as<String>();
-    if (newLabel != deviceLabel) {
-      deviceLabel = newLabel;
-      propConfig.setDeviceLabel(newLabel);
-      configChanged = true;
-    }
-  }
-  
-  if (doc.containsKey("sacnUniverse")) {
-    int newUniverse = doc["sacnUniverse"];
-    if (newUniverse != sacnUniverse && newUniverse >= 1 && newUniverse <= 63999) {
-      sacnUniverse = newUniverse;
-      propConfig.setSACNUniverse(newUniverse);
-      configChanged = true;
-    }
-  }
-  
-  if (doc.containsKey("dmxStartAddress")) {
-    int newAddress = doc["dmxStartAddress"];
-    if (newAddress != sacnStartAddress && newAddress >= 1 && newAddress <= 512) {
-      sacnStartAddress = newAddress;
-      propConfig.setDMXStartAddress(newAddress);
-      configChanged = true;
-    }
-  }
-  
-  if (doc.containsKey("brightness")) {
-    int newBrightness = doc["brightness"];
-    if (newBrightness != ledBrightness && newBrightness >= 0 && newBrightness <= 255) {
-      ledBrightness = newBrightness;
-      propConfig.setBrightness(newBrightness);
-      FastLED.setBrightness(ledBrightness);
-      configChanged = true;
-    }
-  }
-  
-  if (doc.containsKey("wifiSSID")) {
-    String newSSID = doc["wifiSSID"].as<String>();
-    if (newSSID != wifiSSID) {
-      wifiSSID = newSSID;
-      propConfig.setWiFiSSID(newSSID);
-      configChanged = true;
-    }
-  }
-  
-  if (doc.containsKey("wifiPassword")) {
-    String newPassword = doc["wifiPassword"].as<String>();
-    if (newPassword != wifiPassword) {
-      wifiPassword = newPassword;
-      propConfig.setWiFiPassword(newPassword);
-      configChanged = true;
-    }
-  }
-  
-  if (configChanged) {
-    Serial.println("Configuration updated via API");
-    propConfig.printConfig();
-    webServer.send(200, "application/json", "{\"status\":\"updated\"}");
-  } else {
-    webServer.send(200, "application/json", "{\"status\":\"no_changes\"}");
-  }
+void setBuiltinLED(uint8_t r, uint8_t g, uint8_t b) {
+  // Simple status LED control (assuming RGB LED on pin 21)
+  // This is a simplified implementation - adjust based on your hardware
+  if (r > 0) digitalWrite(STATUS_LED_PIN, HIGH);
+  else digitalWrite(STATUS_LED_PIN, LOW);
 }
 
-void handleFactoryReset() {
-  Serial.println("Factory reset requested via API");
+void loadDefaultColors() {
+  const PolyinoculatorConfigData& cfg = polyConfig.getConfig();
   
-  if (propConfig.factoryReset()) {
-    webServer.send(200, "application/json", "{\"status\":\"reset_scheduled\"}");
-    delay(1000);
-    ESP.restart();
-  } else {
-    webServer.send(500, "application/json", "{\"error\":\"reset_failed\"}");
+  // Load Strip 1 default colors
+  for (int i = 0; i < actualLeds1; i++) {
+    leds1[i] = CRGB(cfg.strip1DefaultColorR[i], cfg.strip1DefaultColorG[i], cfg.strip1DefaultColorB[i]);
+  }
+  
+  // Load Strip 2 default colors
+  for (int i = 0; i < actualLeds2; i++) {
+    leds2[i] = CRGB(cfg.strip2DefaultColorR[i], cfg.strip2DefaultColorG[i], cfg.strip2DefaultColorB[i]);
+  }
+  
+  // Load Strip 3 default colors
+  for (int i = 0; i < actualLeds3; i++) {
+    leds3[i] = CRGB(cfg.strip3DefaultColorR[i], cfg.strip3DefaultColorG[i], cfg.strip3DefaultColorB[i]);
+  }
+  
+  Serial.println("✅ Default colors loaded");
+}
+
+void saveCurrentAsDefault() {
+  // Save current Strip 1 colors
+  uint8_t r1[MAX_LEDS_1], g1[MAX_LEDS_1], b1[MAX_LEDS_1];
+  for (int i = 0; i < actualLeds1; i++) {
+    r1[i] = leds1[i].r;
+    g1[i] = leds1[i].g;
+    b1[i] = leds1[i].b;
+  }
+  polyConfig.setDefaultColors(1, r1, g1, b1, actualLeds1);
+  
+  // Save current Strip 2 colors
+  uint8_t r2[MAX_LEDS_2], g2[MAX_LEDS_2], b2[MAX_LEDS_2];
+  for (int i = 0; i < actualLeds2; i++) {
+    r2[i] = leds2[i].r;
+    g2[i] = leds2[i].g;
+    b2[i] = leds2[i].b;
+  }
+  polyConfig.setDefaultColors(2, r2, g2, b2, actualLeds2);
+  
+  // Save current Strip 3 colors
+  uint8_t r3[MAX_LEDS_3], g3[MAX_LEDS_3], b3[MAX_LEDS_3];
+  for (int i = 0; i < actualLeds3; i++) {
+    r3[i] = leds3[i].r;
+    g3[i] = leds3[i].g;
+    b3[i] = leds3[i].b;
+  }
+  polyConfig.setDefaultColors(3, r3, g3, b3, actualLeds3);
+  
+  polyConfig.setUseDefaultColors(true);
+  polyConfig.save();
+  
+  Serial.println("💾 Current LED colors saved as default startup colors");
+}
+
+void handleSetSacnAddressByGroup(int groupNumber) {
+  // Set sACN address based on group number
+  // Each polyinoculator needs (actualLeds1 + actualLeds2 + actualLeds3) * 3 channels
+  int totalChannels = (actualLeds1 + actualLeds2 + actualLeds3) * 3;
+  int newAddress = ((groupNumber - 1) * totalChannels) + 1;
+  
+  polyConfig.setDmxAddress(newAddress);
+  polyConfig.save();
+  
+  sacnStartAddress = newAddress;
+  
+  Serial.printf("🎭 sACN address set to %d for group %d (needs %d channels)\n", 
+                newAddress, groupNumber, totalChannels);
+}
+
+void updateBatteryStatus() {
+  if (!polyConfig.isBatteryMonitoringEnabled()) return;
+  
+  // Read battery voltage from ADC
+  int adcValue = analogRead(BATTERY_ADC_PIN);
+  batteryVoltage = (adcValue / 4095.0) * 3.3 * 2.0; // Assuming voltage divider
+  batteryVoltage *= polyConfig.getBatteryCalibration(); // Apply calibration
+  
+  batteryPercentage = calculateBatteryPercentage(batteryVoltage);
+  batteryStatus = getBatteryStatusString(batteryVoltage);
+}
+
+String getBatteryStatusString(float voltage) {
+  if (voltage > 4.0) return "High";
+  else if (voltage > 3.7) return "Good";
+  else if (voltage > 3.4) return "Low";
+  else if (voltage > 3.0) return "Very Low";
+  else return "Critical";
+}
+
+int calculateBatteryPercentage(float voltage) {
+  // Simple linear mapping - adjust based on your battery type
+  if (voltage >= 4.2) return 100;
+  if (voltage <= 3.0) return 0;
+  return (int)((voltage - 3.0) / (4.2 - 3.0) * 100);
+}
+
+void handleOTAUpdate(String firmwareUrl, String commandId) {
+  Serial.printf("🔄 Handling OTA update from URL: %s\n", firmwareUrl.c_str());
+  
+  // Set status LEDs to indicate OTA in progress
+  setBuiltinLED(0, 0, 255); // Blue for OTA
+  
+  // Perform the OTA update
+  performOTAUpdate(firmwareUrl, commandId);
+}
+
+void performOTAUpdate(String firmwareUrl, String commandId) {
+  Serial.printf("📡 Starting OTA update from: %s\n", firmwareUrl.c_str());
+  
+  // Configure HTTPUpdate
+  httpUpdate.setLedPin(STATUS_LED_PIN, LOW);
+  httpUpdate.rebootOnUpdate(false); // We'll handle reboot ourselves
+  
+  // Set up progress callback
+  httpUpdate.onProgress([](int cur, int total) {
+    if (total > 0) {
+      int progress = (cur * 100) / total;
+      Serial.printf("📊 OTA Progress: %d%% (%d/%d bytes)\n", progress, cur, total);
+    }
+  });
+  
+  // Perform the update
+  WiFiClient client;
+  t_httpUpdate_return result = httpUpdate.update(client, firmwareUrl);
+  
+  switch (result) {
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("❌ OTA Update failed: %s\n", httpUpdate.getLastErrorString().c_str());
+      setBuiltinLED(255, 0, 0); // Red for error
+      break;
+      
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("⚠️ No updates available");
+      setBuiltinLED(255, 255, 0); // Yellow for no update
+      break;
+      
+    case HTTP_UPDATE_OK:
+      Serial.println("✅ OTA Update successful! Rebooting...");
+      setBuiltinLED(0, 255, 0); // Green for success
+      
+      delay(2000); // Give time to see the message
+      
+      // Gracefully stop tasks before reboot
+      if (networkTaskHandle) vTaskDelete(networkTaskHandle);
+      if (ledTaskHandle) vTaskDelete(ledTaskHandle);
+      if (sacnTaskHandle) vTaskDelete(sacnTaskHandle);
+      
+      ESP.restart();
+      break;
   }
 }

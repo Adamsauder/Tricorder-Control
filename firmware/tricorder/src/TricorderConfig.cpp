@@ -1,4 +1,5 @@
 #include "TricorderConfig.h"
+#include <esp_system.h>
 
 TricorderConfig::TricorderConfig() : initialized(false) {
 }
@@ -27,10 +28,39 @@ bool TricorderConfig::begin() {
   return true;
 }
 
+String TricorderConfig::generateUniqueId() {
+  // Get the ESP32 chip ID (full 48-bit MAC address)
+  uint64_t chipid = ESP.getEfuseMac();
+  
+  // Debug output
+  Serial.printf("Full chip ID: 0x%012llX\n", chipid);
+  
+  // Use multiple parts of the MAC address for better uniqueness
+  uint32_t low32 = (uint32_t)chipid;           // Lower 32 bits
+  uint32_t high16 = (uint32_t)(chipid >> 32);  // Upper 16 bits
+  
+  // Combine different parts and apply additional mixing
+  uint32_t mixed1 = low32 ^ (high16 << 16);    // XOR with shifted high bits
+  uint32_t mixed2 = (low32 >> 8) ^ (high16 << 8); // Different shift pattern
+  uint16_t uniquePart = (uint16_t)(mixed1 ^ mixed2); // Final XOR
+  
+  Serial.printf("Low32: 0x%08X, High16: 0x%04X, Mixed: 0x%04X\n", low32, high16, uniquePart);
+  
+  char uniqueId[16];
+  snprintf(uniqueId, sizeof(uniqueId), "TRIC%04X", uniquePart);
+  
+  Serial.printf("Generated device ID: %s\n", uniqueId);
+  
+  return String(uniqueId);
+}
+
 void TricorderConfig::setDefaults() {
+  // Generate a unique device ID based on chip ID
+  String uniqueId = generateUniqueId();
+  
   // Device settings
-  strcpy(config.deviceLabel, "Tricorder-01");
-  strcpy(config.propId, "TRIC001");
+  strcpy(config.deviceLabel, ("Tricorder-" + uniqueId.substring(4)).c_str()); // Use last part after "TRIC"
+  strcpy(config.propId, uniqueId.c_str());
   strcpy(config.description, "Enhanced Tricorder Prop");
   config.fixtureNumber = 1;
   
@@ -54,7 +84,10 @@ void TricorderConfig::setDefaults() {
   strcpy(config.wifiSSID, "Rigging Electric");
   strcpy(config.wifiPassword, "academy123");
   strcpy(config.staticIP, "");
-  strcpy(config.hostname, "tricorder-01");
+  
+  String hostnameSuffix = uniqueId.substring(4);
+  hostnameSuffix.toLowerCase();
+  strcpy(config.hostname, ("tricorder-" + hostnameSuffix).c_str());
   
   // Video settings
   strcpy(config.defaultVideo, "startup.jpg");

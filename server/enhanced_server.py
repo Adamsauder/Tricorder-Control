@@ -102,6 +102,27 @@ class TricorderServer:
         except Exception as e:
             print(f"Failed to start UDP listener: {e}")
     
+    def send_discovery_response(self, addr: tuple):
+        """Send discovery response to device"""
+        try:
+            server_ip = get_server_ip()
+            response = {
+                "action": "server_discovery_response",
+                "server_ip": server_ip,
+                "server_port": CONFIG["udp_port"],
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            response_json = json.dumps(response)
+            udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_socket.sendto(response_json.encode(), (addr[0], 8888))
+            udp_socket.close()
+            
+            print(f"📤 Discovery response sent to {addr[0]}: {response_json}")
+            
+        except Exception as e:
+            print(f"❌ Failed to send discovery response to {addr[0]}: {e}")
+    
     def handle_device_message(self, message: str, addr: tuple):
         """Handle incoming device messages"""
         try:
@@ -111,6 +132,12 @@ class TricorderServer:
             # Skip messages from the server itself
             if addr[0] == get_server_ip():
                 print(f"🚫 Ignoring message from server IP: {addr[0]}")
+                return
+            
+            # Handle server discovery requests
+            if data.get('action') == 'server_discovery':
+                print(f"🔍 Server discovery request from {addr[0]}")
+                self.send_discovery_response(addr)
                 return
             
             # Handle both 'deviceId' (from ESP32) and 'device_id' formats
@@ -431,6 +458,26 @@ def serve_pwa_icon():
     except FileNotFoundError:
         abort(404)
 
+@app.route('/uploads/<filename>')
+def serve_firmware(filename):
+    """Serve firmware files for OTA updates"""
+    try:
+        uploads_dir = os.path.join(os.getcwd(), 'uploads')
+        firmware_path = os.path.join(uploads_dir, filename)
+        
+        # Security check - ensure file is within uploads directory
+        if not os.path.commonpath([uploads_dir, firmware_path]) == uploads_dir:
+            abort(403)
+            
+        if not os.path.exists(firmware_path):
+            abort(404)
+            
+        print(f"📦 Serving firmware file: {filename}")
+        return send_file(firmware_path, as_attachment=True, download_name=filename)
+    except Exception as e:
+        print(f"❌ Error serving firmware {filename}: {e}")
+        abort(404)
+
 def basic_interface():
     """Fallback basic interface"""
     return '''
@@ -697,6 +744,73 @@ def send_command():
         
     except Exception as e:
         print(f"Command error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/device/<device_id>/command', methods=['POST'])
+def send_device_command(device_id):
+    """Send command to a specific device"""
+    try:
+        data = request.get_json()
+        action = data.get('action')
+        parameters = data.get('parameters', {})
+        
+        if not action:
+            return jsonify({'error': 'Missing action'}), 400
+        
+        # Use existing command logic
+        command_data = {
+            'device_id': device_id,
+            'action': action,
+            'parameters': parameters
+        }
+        
+        # Create command in format ESP32 expects
+        esp32_command = {
+            'commandId': str(uuid.uuid4()),
+            'action': action,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Handle different command types
+        if action == 'display_image' and 'filename' in parameters:
+            esp32_command['parameters'] = {'filename': parameters['filename']}
+        elif parameters:
+            esp32_command['parameters'] = parameters
+        
+        # Store command for tracking
+        command_record = {
+            'id': esp32_command['commandId'],
+            'device_id': device_id,
+            'action': action,
+            'parameters': parameters,
+            'timestamp': datetime.now().isoformat()
+        }
+        active_commands[command_record['id']] = command_record
+        command_history.append(command_record)
+        
+        # Send to device (if connected)
+        if device_id in devices:
+            device = devices[device_id]
+            try:
+                # Send UDP command in ESP32 format
+                command_json = json.dumps(esp32_command)
+                if server.udp_socket:
+                    server.udp_socket.sendto(
+                        command_json.encode('utf-8'),
+                        (device['ip_address'], CONFIG['udp_port'])
+                    )
+                print(f"📱 Sent {action} command to {device_id}: {command_json}")
+                
+            except Exception as e:
+                print(f"Failed to send command to {device_id}: {e}")
+                return jsonify({'error': f'Failed to send command: {e}'}), 500
+        else:
+            return jsonify({'error': f'Device {device_id} not found or offline'}), 404
+        
+        return jsonify({'status': 'sent', 'command_id': esp32_command['commandId']})
+        
+    except Exception as e:
+        print(f"Device command error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/battery/<device_id>', methods=['GET'])
@@ -1017,46 +1131,203 @@ def update_prop_type_firmware(prop_type):
         if firmware_file.filename == '':
             return jsonify({'error': 'No firmware file selected'}), 400
         
-        # Save firmware file temporarily
-        firmware_content = firmware_file.read()
+        # Save firmware file to uploads directory
+        uploads_dir = os.path.join(os.getcwd(), 'uploads')
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+        # Generate unique filename with timestamp
+        timestamp = int(time.time())
+        safe_filename = f"{prop_type}_{timestamp}_{firmware_file.filename}"
+        firmware_path = os.path.join(uploads_dir, safe_filename)
+        
+        firmware_file.save(firmware_path)
+        
+        # Get server IP for firmware URL
+        server_ip = get_server_ip()
+        firmware_url = f"http://{server_ip}:{CONFIG['web_port']}/uploads/{safe_filename}"
         
         online_devices = get_online_devices_by_type(prop_type)
         if not online_devices:
             return jsonify({'error': f'No online {prop_type} devices found'}), 404
         
-        # Start firmware update process for all devices
+        # Send OTA update commands via UDP to all devices
         update_results = []
         for device in online_devices:
             device_id = device['device_id']
             ip_address = device['ip_address']
             
             try:
-                # Send firmware to device via HTTP POST (OTA update)
-                url = f"http://{ip_address}/firmware/update"
-                files = {'firmware': (firmware_file.filename, firmware_content, 'application/octet-stream')}
+                # Create OTA update command
+                command_id = str(uuid.uuid4())
+                ota_command = {
+                    'action': 'ota_update',
+                    'commandId': command_id,
+                    'parameters': {
+                        'firmware_url': firmware_url
+                    }
+                }
                 
-                response = requests.post(url, files=files, timeout=30)
+                # Send UDP command to device
+                message = json.dumps(ota_command)
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.sendto(message.encode(), (ip_address, CONFIG['udp_port']))
+                sock.close()
                 
-                if response.status_code == 200:
-                    update_results.append({'device_id': device_id, 'success': True, 'message': 'Update successful'})
-                else:
-                    update_results.append({'device_id': device_id, 'success': False, 'message': f'HTTP {response.status_code}'})
+                print(f"🔄 Sent OTA command to {device_id} at {ip_address}")
+                print(f"📦 Firmware URL: {firmware_url}")
+                
+                update_results.append({
+                    'device_id': device_id, 
+                    'success': True, 
+                    'message': 'OTA update command sent',
+                    'firmware_url': firmware_url
+                })
                     
             except Exception as e:
+                print(f"❌ Failed to send OTA command to {device_id}: {e}")
                 update_results.append({'device_id': device_id, 'success': False, 'message': str(e)})
         
         successful_updates = sum(1 for r in update_results if r['success'])
         
         return jsonify({
             'success': successful_updates > 0,
-            'message': f"Firmware update completed for {prop_type}",
+            'message': f"OTA update commands sent to {prop_type} devices",
             'successful_updates': successful_updates,
             'total_devices': len(online_devices),
+            'firmware_url': firmware_url,
             'results': update_results
         })
         
     except Exception as e:
+        print(f"❌ Firmware update error: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/props/<prop_type>/files/upload', methods=['POST'])
+def upload_files_to_prop_type(prop_type):
+    """Upload files to SD cards of all online devices of a prop type"""
+    try:
+        if 'files' not in request.files:
+            return jsonify({'error': 'No files provided'}), 400
+        
+        files = request.files.getlist('files')
+        if not files or all(f.filename == '' for f in files):
+            return jsonify({'error': 'No files selected'}), 400
+        
+        # Save files to uploads directory
+        uploads_dir = os.path.join(os.getcwd(), 'uploads', 'sdcard_files')
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+        saved_files = []
+        server_ip = get_server_ip()
+        
+        # Save each file
+        for file in files:
+            if file.filename != '':
+                # Generate safe filename with timestamp
+                timestamp = int(time.time())
+                safe_filename = f"{timestamp}_{file.filename}"
+                file_path = os.path.join(uploads_dir, safe_filename)
+                
+                file.save(file_path)
+                file_url = f"http://{server_ip}:{CONFIG['web_port']}/uploads/sdcard_files/{safe_filename}"
+                
+                saved_files.append({
+                    'original_name': file.filename,
+                    'safe_name': safe_filename,
+                    'url': file_url,
+                    'path': file_path
+                })
+        
+        if not saved_files:
+            return jsonify({'error': 'No valid files to upload'}), 400
+        
+        online_devices = get_online_devices_by_type(prop_type)
+        if not online_devices:
+            return jsonify({'error': f'No online {prop_type} devices found'}), 404
+        
+        # Send file upload commands to all devices
+        upload_results = []
+        for device in online_devices:
+            device_id = device['device_id']
+            device_results = []
+            
+            for file_info in saved_files:
+                try:
+                    # Create file upload command
+                    command_id = str(uuid.uuid4())
+                    command = {
+                        'action': 'upload_file',
+                        'commandId': command_id,
+                        'parameters': {
+                            'filename': file_info['original_name'],
+                            'url': file_info['url']
+                        }
+                    }
+                    
+                    # Send UDP command to device
+                    message = json.dumps(command)
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    sock.sendto(message.encode(), (device['ip_address'], CONFIG['udp_port']))
+                    sock.close()
+                    
+                    print(f"📁 Sent file upload command to {device_id} at {device['ip_address']}")
+                    print(f"📄 File: {file_info['original_name']} -> {file_info['url']}")
+                    
+                    device_results.append({
+                        'filename': file_info['original_name'],
+                        'success': True,
+                        'message': 'File upload command sent'
+                    })
+                    
+                except Exception as e:
+                    print(f"❌ Failed to send file upload command to {device_id}: {e}")
+                    device_results.append({
+                        'filename': file_info['original_name'],
+                        'success': False,
+                        'message': str(e)
+                    })
+            
+            upload_results.append({
+                'device_id': device_id,
+                'files': device_results
+            })
+        
+        successful_uploads = sum(1 for device in upload_results 
+                               for file in device['files'] if file['success'])
+        total_uploads = len(saved_files) * len(online_devices)
+        
+        return jsonify({
+            'success': successful_uploads > 0,
+            'message': f"File upload commands sent to {prop_type} devices",
+            'successful_uploads': successful_uploads,
+            'total_uploads': total_uploads,
+            'files_uploaded': [f['original_name'] for f in saved_files],
+            'results': upload_results
+        })
+        
+    except Exception as e:
+        print(f"❌ File upload error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/uploads/sdcard_files/<filename>')
+def serve_sdcard_file(filename):
+    """Serve SD card files for device download"""
+    try:
+        uploads_dir = os.path.join(os.getcwd(), 'uploads', 'sdcard_files')
+        file_path = os.path.join(uploads_dir, filename)
+        
+        # Security check - ensure file is within uploads directory
+        if not os.path.commonpath([uploads_dir, file_path]) == uploads_dir:
+            abort(403)
+            
+        if not os.path.exists(file_path):
+            abort(404)
+            
+        print(f"📁 Serving SD card file: {filename}")
+        return send_file(file_path, as_attachment=True, download_name=filename)
+    except Exception as e:
+        print(f"❌ Error serving SD card file {filename}: {e}")
+        abort(404)
 
 @app.route('/api/props/<prop_type>/command', methods=['POST'])
 def send_prop_type_command(prop_type):

@@ -34,10 +34,10 @@
 #define BATTERY_ADC_PIN A0 // Battery voltage monitoring
 
 // LED configuration - configurable via settings
-#define MAX_LEDS_1 30      // Maximum LEDs for Strip 1
-#define MAX_LEDS_2 60      // Maximum LEDs for Strip 2 (longer ribbon)
-#define MAX_LEDS_3 30      // Maximum LEDs for Strip 3
-#define TOTAL_MAX_LEDS 120 // Total maximum LEDs
+#define MAX_LEDS_1 6       // Maximum LEDs for Strip 1 (small)
+#define MAX_LEDS_2 14      // Maximum LEDs for Strip 2 (longer ribbon)
+#define MAX_LEDS_3 6       // Maximum LEDs for Strip 3 (small)
+#define TOTAL_MAX_LEDS 26  // Total maximum LEDs
 
 // Configuration and state management
 PolyinoculatorConfig polyConfig;
@@ -53,6 +53,7 @@ const int SACN_PORT = 5568;     // sACN E1.31 standard port
 #define E131_PACKET_SIZE 638
 #define E131_DATA_OFFSET 126
 #define E131_UNIVERSE_OFFSET 113
+#define SACN_MULTICAST_BASE "239.255.0.0"  // sACN multicast base address
 
 // Device configuration - loaded from storage
 String deviceId;
@@ -65,9 +66,9 @@ String wifiSSID;
 String wifiPassword;
 
 // Hardware objects - Separate arrays for each strip with maximum sizes
-CRGB leds1[MAX_LEDS_1];  // Strip 1: D3 (GPIO4), up to 30 LEDs
-CRGB leds2[MAX_LEDS_2];  // Strip 2: D4 (GPIO5), up to 60 LEDs - LONGER RIBBON
-CRGB leds3[MAX_LEDS_3];  // Strip 3: D5 (GPIO6), up to 30 LEDs
+CRGB leds1[MAX_LEDS_1];  // Strip 1: D3 (GPIO4), up to 6 LEDs
+CRGB leds2[MAX_LEDS_2];  // Strip 2: D4 (GPIO5), up to 14 LEDs - LONGER RIBBON
+CRGB leds3[MAX_LEDS_3];  // Strip 3: D5 (GPIO6), up to 6 LEDs
 WiFiUDP udp;
 WiFiUDP sacnUdp;
 WebServer webServer(80);
@@ -116,6 +117,8 @@ void handleUDPPacket();
 void sendStatus();
 void setupWebServer();
 void handleSacnPacket();
+String getMulticastAddress(int universe);
+void initializeSACN();
 void updateLEDs();
 void loadConfiguration();
 void saveConfiguration();
@@ -182,12 +185,9 @@ void setup() {
   udp.begin(polyConfig.getUdpPort());
   Serial.printf("📡 UDP server started on port %d\n", polyConfig.getUdpPort());
   
-  // Setup sACN UDP
+  // Setup sACN UDP with multicast
   if (polyConfig.isSacnEnabled()) {
-    sacnUdp.begin(SACN_PORT);
-    Serial.printf("🎭 sACN server started on port %d\n", SACN_PORT);
-    Serial.printf("🎭 sACN Universe: %d, DMX Address: %d\n", 
-                  polyConfig.getSacnUniverse(), polyConfig.getDmxAddress());
+    initializeSACN();
   }
   
   // Setup web server
@@ -204,6 +204,53 @@ void setup() {
   Serial.println("✅ Enhanced Polyinoculator ready!");
   Serial.printf("🌐 Device: %s (%s)\n", deviceLabel.c_str(), deviceId.c_str());
   Serial.printf("📡 IP Address: %s\n", WiFi.localIP().toString().c_str());
+}
+
+// Calculate multicast address for sACN universe
+String getMulticastAddress(int universe) {
+  // sACN uses multicast addresses 239.255.0.1 through 239.255.255.255
+  // Universe 1 = 239.255.0.1, Universe 2 = 239.255.0.2, etc.
+  int subnet = (universe >> 8) & 0xFF;
+  int host = universe & 0xFF;
+  
+  if (subnet == 0) {
+    subnet = 0;
+    host = universe;
+  }
+  
+  return String("239.255.") + String(subnet) + "." + String(host);
+}
+
+void initializeSACN() {
+  if (!polyConfig.isSacnEnabled()) {
+    Serial.println("🎭 sACN disabled in configuration");
+    sacnEnabled = false;
+    return;
+  }
+  
+  // Get sACN configuration
+  sacnUniverse = polyConfig.getSacnUniverse();
+  sacnStartAddress = polyConfig.getDmxAddress();
+  
+  Serial.printf("🎭 Initializing sACN: Universe %d, Address %d\n", sacnUniverse, sacnStartAddress);
+  
+  // Calculate multicast address for our universe
+  String multicastAddr = getMulticastAddress(sacnUniverse);
+  IPAddress multicastIP;
+  if (!multicastIP.fromString(multicastAddr)) {
+    Serial.printf("❌ Invalid multicast address: %s\n", multicastAddr.c_str());
+    sacnEnabled = false;
+    return;
+  }
+  
+  // Start sACN UDP socket with multicast
+  if (sacnUdp.beginMulticast(multicastIP, SACN_PORT)) {
+    Serial.printf("✅ sACN receiver started: %s:%d\n", multicastAddr.c_str(), SACN_PORT);
+    sacnEnabled = true;
+  } else {
+    Serial.println("❌ Failed to start sACN receiver");
+    sacnEnabled = false;
+  }
 }
 
 void loop() {

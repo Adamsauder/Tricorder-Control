@@ -19,15 +19,15 @@ struct PolyinoculatorConfigData {
   
   // LED settings
   uint8_t brightness;
-  uint8_t strip1DefaultColorR[30];  // Default red values for Strip 1 LEDs (D3)
-  uint8_t strip1DefaultColorG[30];  // Default green values for Strip 1 LEDs
-  uint8_t strip1DefaultColorB[30];  // Default blue values for Strip 1 LEDs
-  uint8_t strip2DefaultColorR[60];  // Default red values for Strip 2 LEDs (D4 - longer ribbon)
-  uint8_t strip2DefaultColorG[60];  // Default green values for Strip 2 LEDs
-  uint8_t strip2DefaultColorB[60];  // Default blue values for Strip 2 LEDs
-  uint8_t strip3DefaultColorR[30];  // Default red values for Strip 3 LEDs (D5)
-  uint8_t strip3DefaultColorG[30];  // Default green values for Strip 3 LEDs
-  uint8_t strip3DefaultColorB[30];  // Default blue values for Strip 3 LEDs
+  uint8_t strip1DefaultColorR[6];   // Default red values for Strip 1 LEDs (D3)
+  uint8_t strip1DefaultColorG[6];   // Default green values for Strip 1 LEDs
+  uint8_t strip1DefaultColorB[6];   // Default blue values for Strip 1 LEDs
+  uint8_t strip2DefaultColorR[14];  // Default red values for Strip 2 LEDs (D4 - longer ribbon)
+  uint8_t strip2DefaultColorG[14];  // Default green values for Strip 2 LEDs
+  uint8_t strip2DefaultColorB[14];  // Default blue values for Strip 2 LEDs
+  uint8_t strip3DefaultColorR[6];   // Default red values for Strip 3 LEDs (D5)
+  uint8_t strip3DefaultColorG[6];   // Default green values for Strip 3 LEDs
+  uint8_t strip3DefaultColorB[6];   // Default blue values for Strip 3 LEDs
   bool useDefaultColors;      // Whether to use default colors on startup
   
   // LED strip configuration
@@ -66,6 +66,7 @@ public:
   bool save();
   void reset();
   void setDefaults();
+  String generateUniqueId();
   
   // Device configuration
   void setDeviceLabel(const String& label);

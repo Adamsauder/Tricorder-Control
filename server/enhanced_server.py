@@ -78,7 +78,52 @@ def auto_configure_polyinoculator_for_sacn(device_id: str, device_info: dict):
 class TricorderServer:
     def __init__(self):
         self.udp_socket = None
-        self.running = False
+        
+    def get_reachable_server_ip(self, device_ip: str) -> str:
+        """Get the server IP that can reach the device's subnet"""
+        try:
+            import subprocess
+            import platform
+            
+            # Get all network interfaces
+            if platform.system() == "Windows":
+                result = subprocess.run(['ipconfig'], capture_output=True, text=True)
+                lines = result.stdout.split('\n')
+                
+                # Parse Windows ipconfig output to find interface IPs
+                interfaces = []
+                current_interface = None
+                for line in lines:
+                    line = line.strip()
+                    if "adapter" in line.lower():
+                        current_interface = line
+                    elif "IPv4 Address" in line and ":" in line:
+                        ip = line.split(":")[-1].strip()
+                        if ip and not ip.startswith("127."):
+                            interfaces.append(ip)
+            else:
+                # Linux/Mac approach
+                result = subprocess.run(['hostname', '-I'], capture_output=True, text=True)
+                interfaces = [ip.strip() for ip in result.stdout.split() if ip.strip()]
+            
+            # Find the interface that's on the same subnet as the device
+            device_subnet = ".".join(device_ip.split(".")[:-1])  # e.g., "192.168.0"
+            
+            for interface_ip in interfaces:
+                if interface_ip.startswith(device_subnet):
+                    return interface_ip
+                    
+            # If no matching subnet found, return the first non-loopback interface
+            for interface_ip in interfaces:
+                if not interface_ip.startswith("127."):
+                    return interface_ip
+                    
+            # Fallback to the original method
+            return get_server_ip()
+            
+        except Exception as e:
+            print(f"⚠️ Error determining reachable server IP: {e}")
+            return get_server_ip()
         
     def start_udp_listener(self):
         """Start UDP listener for device communication"""
@@ -105,7 +150,10 @@ class TricorderServer:
     def send_discovery_response(self, addr: tuple):
         """Send discovery response to device"""
         try:
-            server_ip = get_server_ip()
+            # Determine the best server IP to respond with based on the requesting device's subnet
+            device_ip = addr[0]
+            server_ip = self.get_reachable_server_ip(device_ip)
+            
             response = {
                 "action": "server_discovery_response",
                 "server_ip": server_ip,

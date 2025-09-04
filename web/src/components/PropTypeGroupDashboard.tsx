@@ -30,7 +30,7 @@ import PropTypeCard from './PropTypeCard';
 import PlaybookControl from './PlaybookControl';
 
 // API functions for prop-type operations
-const API_BASE = process.env.NODE_ENV === 'development' ? '' : 'http://localhost:8080';
+const API_BASE = 'http://192.168.1.24:8080';
 
 interface PropType {
   type: string;

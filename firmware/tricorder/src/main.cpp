@@ -165,6 +165,10 @@ struct NetworkCommand {
   uint16_t remotePort;
 };
 
+// Global variables for current UDP sender (for response sending)
+IPAddress currentSenderIP;
+uint16_t currentSenderPort;
+
 // Video Command Structure
 struct VideoCommand {
   enum Type { PLAY_VIDEO, DISPLAY_IMAGE, STOP_VIDEO };
@@ -239,20 +243,10 @@ void dimPixelBuffer(uint16_t* pixels, int count, uint8_t brightness) {
   }
 }
 
-// Video frame callback with software dimming
+// Video frame callback without brightness filtering for clean display
 int JPEGDraw(JPEGDRAW *pDraw) {
-  // Get current display brightness setting for software dimming
-  uint8_t brightness = tricorderConfig.getDisplayBrightness();
-  
-  // Apply software dimming if brightness is less than full
-  if (brightness < 255) {
-    // Create a copy of the pixel data for dimming
-    uint16_t* dimmedPixels = (uint16_t*)pDraw->pPixels;
-    int pixelCount = pDraw->iWidth * pDraw->iHeight;
-    dimPixelBuffer(dimmedPixels, pixelCount, brightness);
-  }
-  
-  // Draw the (possibly dimmed) JPEG frame to the TFT display
+  // Draw the JPEG frame directly to the TFT display without brightness modifications
+  // This prevents image corruption and ensures proper display quality
   tft.pushImage(pDraw->x, pDraw->y, pDraw->iWidth, pDraw->iHeight, pDraw->pPixels);
   return 1;
 }
@@ -307,7 +301,7 @@ String getMulticastAddress(int universe);
 void ledTask(void *pvParameters);
 void networkTask(void *pvParameters);
 void videoTask(void *pvParameters);
-void processNetworkCommand(String jsonCommand);
+void processNetworkCommand(NetworkCommand &netCmd);
 
 // OTA Update functions
 void performOTAUpdate(String firmwareUrl, String commandId);
@@ -407,7 +401,7 @@ void setup() {
   // Create inter-core communication queues BEFORE creating tasks
   ledCommandQueue = xQueueCreate(10, sizeof(LEDCommand));
   networkCommandQueue = xQueueCreate(20, sizeof(NetworkCommand));
-  videoCommandQueue = xQueueCreate(5, sizeof(VideoCommand));
+  videoCommandQueue = xQueueCreate(20, sizeof(VideoCommand));  // Increased from 5 to 20
   
   if (!ledCommandQueue || !networkCommandQueue || !videoCommandQueue) {
     Serial.println("FATAL: Failed to create communication queues!");
@@ -644,6 +638,26 @@ void setup() {
   updateBootScreenWithStatus();
   
   Serial.println("Setup complete!");
+  
+  // Auto-display test image after boot
+  Serial.println("Auto-displaying SFA2_202_211_Med_Tricorder_BODY.jpg after boot...");
+  if (sdCardInitialized && videoCommandQueue) {
+    VideoCommand autoCmd;
+    autoCmd.type = VideoCommand::DISPLAY_IMAGE;
+    strncpy(autoCmd.filename, "SFA2_202_211_Med_Tricorder_BODY.jpg", sizeof(autoCmd.filename) - 1);
+    autoCmd.filename[sizeof(autoCmd.filename) - 1] = '\0';
+    
+    // Give the tasks a moment to start up, then send the command
+    delay(1000);
+    BaseType_t result = xQueueSend(videoCommandQueue, &autoCmd, pdMS_TO_TICKS(2000));
+    if (result == pdPASS) {
+      Serial.println("Auto-display command queued successfully");
+    } else {
+      Serial.println("Failed to queue auto-display command");
+    }
+  } else {
+    Serial.println("Cannot auto-display: SD card not initialized or video queue not ready");
+  }
 }
 
 void loop() {
@@ -1101,14 +1115,24 @@ void networkTask(void *pvParameters) {
       
       int packetSize = udp.parsePacket();
       if (packetSize) {
+        // Store remote IP and port for response sending
+        IPAddress senderIP = udp.remoteIP();
+        uint16_t senderPort = udp.remotePort();
+        
         char incomingPacket[255];
         int len = udp.read(incomingPacket, 255);
         if (len > 0) {
           incomingPacket[len] = 0;
         }
         
-        // Process the command (simplified version)
-        processNetworkCommand(String(incomingPacket));
+        // Store the sender info globally for sendResponse function
+        NetworkCommand netCmd;
+        netCmd.data = String(incomingPacket);
+        netCmd.remoteIP = senderIP;
+        netCmd.remotePort = senderPort;
+        
+        // Process the command with stored sender info
+        processNetworkCommand(netCmd);
       }
       
       // Send periodic status to server (every 10 seconds)
@@ -1172,7 +1196,12 @@ void videoTask(void *pvParameters) {
 }
 
 // Simplified network command processor for network task
-void processNetworkCommand(String jsonCommand) {
+void processNetworkCommand(NetworkCommand &netCmd) {
+  // Store sender info globally for response functions
+  currentSenderIP = netCmd.remoteIP;
+  currentSenderPort = netCmd.remotePort;
+  
+  String jsonCommand = netCmd.data;
   Serial.printf("Network Task: Received JSON: %s\n", jsonCommand.c_str());
   
   JsonDocument doc;
@@ -1195,7 +1224,7 @@ void processNetworkCommand(String jsonCommand) {
       
       String responseStr;
       serializeJson(response, responseStr);
-      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      udp.beginPacket(currentSenderIP, currentSenderPort);
       udp.print(responseStr);
       udp.endPacket();
     }
@@ -1282,12 +1311,18 @@ void processNetworkCommand(String jsonCommand) {
       strncpy(vidCmd.filename, filename.c_str(), sizeof(vidCmd.filename) - 1);
       vidCmd.filename[sizeof(vidCmd.filename) - 1] = '\0';  // Ensure null termination
       vidCmd.loop = loop;
-      BaseType_t result = xQueueSend(videoCommandQueue, &vidCmd, pdMS_TO_TICKS(1000));
+      
+      // Check queue status before sending
+      UBaseType_t queueSpaces = uxQueueSpacesAvailable(videoCommandQueue);
+      Serial.printf("Video queue spaces available: %d\n", queueSpaces);
+      
+      BaseType_t result = xQueueSend(videoCommandQueue, &vidCmd, pdMS_TO_TICKS(100)); // Reduced timeout
       
       if (result == pdPASS) {
         sendResponse(commandId, "Video playback started");
       } else {
-        sendResponse(commandId, "Failed to queue video command");
+        Serial.printf("Failed to queue video command - queue full or timeout\n");
+        sendResponse(commandId, "Failed to queue video command - system busy");
       }
     }
     else if (action == "display_image") {
@@ -1310,12 +1345,18 @@ void processNetworkCommand(String jsonCommand) {
       vidCmd.filename[sizeof(vidCmd.filename) - 1] = '\0';  // Ensure null termination
       
       Serial.printf("Network Task: Queuing display command with filename: '%s'\n", vidCmd.filename);
-      BaseType_t result = xQueueSend(videoCommandQueue, &vidCmd, pdMS_TO_TICKS(1000));
+      
+      // Check queue status before sending
+      UBaseType_t queueSpaces = uxQueueSpacesAvailable(videoCommandQueue);
+      Serial.printf("Video queue spaces available: %d\n", queueSpaces);
+      
+      BaseType_t result = xQueueSend(videoCommandQueue, &vidCmd, pdMS_TO_TICKS(100)); // Reduced timeout
       
       if (result == pdPASS) {
         sendResponse(commandId, "Image command queued");
       } else {
-        sendResponse(commandId, "Failed to queue image command");
+        Serial.printf("Failed to queue image command - queue full or timeout\n");
+        sendResponse(commandId, "Failed to queue image command - system busy");
       }
     }
     else if (action == "status") {
@@ -1332,7 +1373,7 @@ void processNetworkCommand(String jsonCommand) {
       String response;
       serializeJson(batteryDoc, response);
       
-      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      udp.beginPacket(currentSenderIP, currentSenderPort);
       udp.write((const uint8_t*)response.c_str(), response.length());
       udp.endPacket();
     }
@@ -1377,7 +1418,7 @@ void processNetworkCommand(String jsonCommand) {
       String response;
       serializeJson(debugDoc, response);
       
-      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      udp.beginPacket(currentSenderIP, currentSenderPort);
       udp.write((const uint8_t*)response.c_str(), response.length());
       udp.endPacket();
     }
@@ -1441,7 +1482,7 @@ void processNetworkCommand(String jsonCommand) {
       
       String response;
       serializeJson(sacnStatus, response);
-      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      udp.beginPacket(currentSenderIP, currentSenderPort);
       udp.print(response);
       udp.endPacket();
     }
@@ -1642,9 +1683,12 @@ void sendResponse(String commandId, String result) {
   String response;
   serializeJson(doc, response);
   
-  udp.beginPacket(udp.remoteIP(), udp.remotePort());
+  // Use globally stored sender IP and port instead of udp.remoteIP()
+  udp.beginPacket(currentSenderIP, currentSenderPort);
   udp.write((const uint8_t*)response.c_str(), response.length());
   udp.endPacket();
+  
+  Serial.printf("Sent response to %s:%d - %s\n", currentSenderIP.toString().c_str(), currentSenderPort, response.c_str());
 }
 
 void sendStatus(String commandId) {
@@ -1671,11 +1715,12 @@ void sendStatus(String commandId) {
   String response;
   serializeJson(doc, response);
   
-  udp.beginPacket(udp.remoteIP(), udp.remotePort());
+  // Use globally stored sender IP and port instead of udp.remoteIP()
+  udp.beginPacket(currentSenderIP, currentSenderPort);
   udp.write((const uint8_t*)response.c_str(), response.length());
   udp.endPacket();
   
-  Serial.printf("Sent status: %s\n", response.c_str());
+  Serial.printf("Sent status to %s:%d - %s\n", currentSenderIP.toString().c_str(), currentSenderPort, response.c_str());
 }
 
 void discoverServers() {

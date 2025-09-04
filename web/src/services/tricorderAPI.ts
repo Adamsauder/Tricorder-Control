@@ -2,8 +2,9 @@ import axios from 'axios';
 import { io, Socket } from 'socket.io-client';
 
 // API base configuration
-const API_BASE = '/api';
-const WS_BASE = '/';
+const SERVER_IP = '192.168.1.24:8080';
+const API_BASE = `http://${SERVER_IP}/api`;
+const WS_BASE = `http://${SERVER_IP}`;
 
 // Create axios instance with default config
 const api = axios.create({

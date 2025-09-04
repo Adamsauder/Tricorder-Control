@@ -43,7 +43,7 @@ import {
 } from '@mui/icons-material';
 
 // API functions
-const API_BASE = '';
+const API_BASE = 'http://192.168.1.24:8080';
 
 interface TricorderDevice {
   device_id: string;

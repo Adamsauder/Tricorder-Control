@@ -33,9 +33,14 @@ bool PropConfig::begin() {
 }
 
 bool PropConfig::loadConfig(Config& config) {
-    if (!prefs.begin(NAMESPACE, true)) { // true = read-only mode for loading
+    Serial.println("PropConfig: Starting loadConfig()");
+    
+    if (!prefs.begin(NAMESPACE, false)) { // false = read/write mode
+        Serial.println("PropConfig: Failed to begin NVS namespace");
         return false;
     }
+    
+    Serial.println("PropConfig: NVS namespace opened successfully");
     
     // Load configuration with defaults for Defragmentor
     config.deviceLabel = prefs.getString(KEY_DEVICE_LABEL, "DEFRAGMENTOR_001");
@@ -43,34 +48,84 @@ bool PropConfig::loadConfig(Config& config) {
     config.dmxStartAddress = prefs.getInt(KEY_DMX_START_ADDR, 1);
     config.deviceType = prefs.getString(KEY_DEVICE_TYPE, "defragmentor");
     config.numLeds = prefs.getInt(KEY_NUM_LEDS, 50);  // Default LED count for defragmentor
-    config.brightness = prefs.getInt(KEY_BRIGHTNESS, 128);
+    config.brightness = prefs.getInt(KEY_BRIGHTNESS, 255);
     config.wifiSSID = prefs.getString(KEY_WIFI_SSID, "Rigging Electric");
     config.wifiPassword = prefs.getString(KEY_WIFI_PASSWORD, "academy123");
     config.firstBoot = prefs.getBool(KEY_FIRST_BOOT, true);
     config.fixtureNumber = prefs.getInt(KEY_FIXTURE_NUMBER, 3);  // Default to 3 for defragmentor
     
+    Serial.printf("PropConfig: Loaded values - Universe: %d, DMX: %d, Label: %s\n", 
+                  config.sacnUniverse, config.dmxStartAddress, config.deviceLabel.c_str());
+    
     prefs.end();
+    Serial.println("PropConfig: loadConfig() completed successfully");
     return true;
 }
 
 bool PropConfig::saveConfig(const Config& config) {
+    Serial.println("PropConfig: Starting saveConfig()");
+    Serial.printf("PropConfig: Values to save - Universe: %d, DMX: %d, Label: %s\n", 
+                  config.sacnUniverse, config.dmxStartAddress, config.deviceLabel.c_str());
+    
     if (!prefs.begin(NAMESPACE, false)) {
+        Serial.println("PropConfig: Failed to begin NVS namespace for saving");
         return false;
     }
     
+    Serial.println("PropConfig: NVS namespace opened for writing");
+    
     bool success = true;
-    success &= prefs.putString(KEY_DEVICE_LABEL, config.deviceLabel);
-    success &= prefs.putInt(KEY_SACN_UNIVERSE, config.sacnUniverse);
-    success &= prefs.putInt(KEY_DMX_START_ADDR, config.dmxStartAddress);
-    success &= prefs.putString(KEY_DEVICE_TYPE, config.deviceType);
-    success &= prefs.putInt(KEY_NUM_LEDS, config.numLeds);
-    success &= prefs.putInt(KEY_BRIGHTNESS, config.brightness);
-    success &= prefs.putString(KEY_WIFI_SSID, config.wifiSSID);
-    success &= prefs.putString(KEY_WIFI_PASSWORD, config.wifiPassword);
-    success &= prefs.putBool(KEY_FIRST_BOOT, config.firstBoot);
-    success &= prefs.putInt(KEY_FIXTURE_NUMBER, config.fixtureNumber);
+    
+    // Save each value individually with error checking
+    if (!prefs.putString(KEY_DEVICE_LABEL, config.deviceLabel)) {
+        Serial.println("PropConfig: Failed to save device label");
+        success = false;
+    }
+    if (!prefs.putInt(KEY_SACN_UNIVERSE, config.sacnUniverse)) {
+        Serial.println("PropConfig: Failed to save SACN universe");
+        success = false;
+    }
+    if (!prefs.putInt(KEY_DMX_START_ADDR, config.dmxStartAddress)) {
+        Serial.println("PropConfig: Failed to save DMX start address");
+        success = false;
+    }
+    if (!prefs.putString(KEY_DEVICE_TYPE, config.deviceType)) {
+        Serial.println("PropConfig: Failed to save device type");
+        success = false;
+    }
+    if (!prefs.putInt(KEY_NUM_LEDS, config.numLeds)) {
+        Serial.println("PropConfig: Failed to save num LEDs");
+        success = false;
+    }
+    if (!prefs.putInt(KEY_BRIGHTNESS, config.brightness)) {
+        Serial.println("PropConfig: Failed to save brightness");
+        success = false;
+    }
+    if (!prefs.putString(KEY_WIFI_SSID, config.wifiSSID)) {
+        Serial.println("PropConfig: Failed to save WiFi SSID");
+        success = false;
+    }
+    if (!prefs.putString(KEY_WIFI_PASSWORD, config.wifiPassword)) {
+        Serial.println("PropConfig: Failed to save WiFi password");
+        success = false;
+    }
+    if (!prefs.putBool(KEY_FIRST_BOOT, config.firstBoot)) {
+        Serial.println("PropConfig: Failed to save first boot flag");
+        success = false;
+    }
+    if (!prefs.putInt(KEY_FIXTURE_NUMBER, config.fixtureNumber)) {
+        Serial.println("PropConfig: Failed to save fixture number");
+        success = false;
+    }
+    
+    if (success) {
+        Serial.println("PropConfig: All values saved successfully");
+    } else {
+        Serial.println("PropConfig: Some values failed to save");
+    }
     
     prefs.end();
+    Serial.printf("PropConfig: saveConfig() completed with result: %s\n", success ? "SUCCESS" : "FAILURE");
     return success;
 }
 

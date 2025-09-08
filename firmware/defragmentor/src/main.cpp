@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <driver/ledc.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
@@ -49,6 +50,25 @@ String wifiPassword = "academy123";
 // Web server instance
 AsyncWebServer server(80);
 
+// SACN/E1.31 UDP setup
+WiFiUDP udp;
+const int SACN_PORT = 5568;
+const int SACN_PACKET_SIZE = 638;
+uint8_t sacnPacketBuffer[SACN_PACKET_SIZE];
+
+// DMX channel states for LED control
+uint8_t dmxData[16]; // 16 channels: 8 for idle state, 8 for active state
+bool sacnEnabled = true;
+unsigned long lastSacnUpdate = 0;
+const unsigned long SACN_TIMEOUT = 5000; // 5 seconds timeout
+
+// LED color states
+struct LEDState {
+  uint8_t r, g, b, w;
+};
+LEDState idleLEDs[2];   // Channels 1-8: LED1(RGBW) + LED2(RGBW)
+LEDState activeLEDs[2]; // Channels 9-16: LED1(RGBW) + LED2(RGBW)
+
 // Function declarations
 void loadConfiguration();
 void enableServoPower(bool enable);
@@ -63,6 +83,13 @@ void handleGetConfig();
 // Configuration management functions - need request parameter
 void handleGetConfig(AsyncWebServerRequest *request);
 
+// SACN/E1.31 packet processing functions
+void setupSACN();
+void processSACNPacket();
+void updateLEDsFromSACN();
+bool isSACNPacket(uint8_t* buffer, int length);
+void parseSACNData(uint8_t* buffer);
+
 void setup() {
   Serial.begin(115200);
   delay(2000);
@@ -70,13 +97,7 @@ void setup() {
   Serial.println("Simplified Defragmentor Control System Starting...");
   Serial.println("Hardware: ESP32-C3 XIAO with Native PWM Servo Control");
   
-  // Initialize configuration system first
-  if (!propConfig.begin()) {
-    Serial.println("ERROR: Failed to initialize configuration storage!");
-    return;
-  }
-  
-  // Load configuration (with WiFi credentials)
+  // Load configuration (with WiFi credentials) - PropConfig handles NVS initialization internally
   loadConfiguration();
   
   Serial.printf("Device: %s (%s)\n", deviceLabel.c_str(), deviceId.c_str());
@@ -124,6 +145,7 @@ void setup() {
     // Setup web server with OTA after WiFi connection
     if (WiFi.status() == WL_CONNECTED) {
       setupWebServer();
+      setupSACN(); // Initialize SACN after WiFi connection
     }
   } else {
     Serial.println("No WiFi credentials configured - running in standalone mode");
@@ -149,6 +171,9 @@ void setup() {
 }
 
 void loop() {
+  // Process SACN packets if available
+  processSACNPacket();
+  
   // Handle trigger input
   bool triggerPressed = digitalRead(TRIGGER_PIN) == LOW; // Assuming active low
   
@@ -156,16 +181,21 @@ void loop() {
     // Trigger pressed, activate sequence
     Serial.println("Trigger activated - starting defragmentation sequence");
     currentState = true;
-    setLEDPattern(); // LEDs change FIRST for immediate feedback
+    updateLEDsFromSACN(); // Update LEDs from SACN data for immediate feedback
     moveServoToPosition(180); // Then servo moves to active position
-    setLEDPattern(); // LEDs change back after movement completes
   } else if (!triggerPressed && currentState) {
     // Trigger released, return to idle
     Serial.println("Trigger released - returning to idle");
     currentState = false;
-    setLEDPattern(); // LEDs change FIRST for immediate feedback
+    updateLEDsFromSACN(); // Update LEDs from SACN data for immediate feedback
     moveServoToPosition(0); // Then servo returns to idle position
-    setLEDPattern(); // LEDs change back after movement completes
+  }
+  
+  // Check SACN timeout and fall back to local pattern if needed
+  if (sacnEnabled && (millis() - lastSacnUpdate > SACN_TIMEOUT)) {
+    Serial.println("SACN timeout - falling back to local LED patterns");
+    sacnEnabled = false;
+    setLEDPattern(); // Use local pattern
   }
   
   // Send periodic status (every 5 seconds)
@@ -256,8 +286,10 @@ void moveServoToPosition(int angle) {
   delay(500); // Allow servo to move
 }
 
-// Set LED pattern based on current state
+// Set LED pattern based on current state (fallback when SACN not available)
 void setLEDPattern() {
+  Serial.println("Using fallback LED pattern (SACN not available)");
+  
   if (currentState) {
     // Active state - both LEDs bright red when triggered
     strip.setPixelColor(0, strip.Color(255, 0, 0, 0));  // Bright red (R,G,B,W)
@@ -609,7 +641,7 @@ void setupWebServer() {
       String newLabel = doc["deviceLabel"].as<String>();
       if (newLabel != deviceLabel) {
         deviceLabel = newLabel;
-        propConfig.setDeviceLabel(newLabel);
+        Serial.printf("Device Label changed to: %s\n", newLabel.c_str());
         configChanged = true;
       }
     }
@@ -618,7 +650,7 @@ void setupWebServer() {
       int newNumber = doc["fixtureNumber"];
       if (newNumber != fixtureNumber && newNumber >= 1 && newNumber <= 999) {
         fixtureNumber = newNumber;
-        propConfig.setFixtureNumber(newNumber);
+        Serial.printf("Fixture Number changed to: %d\n", newNumber);
         configChanged = true;
       }
     }
@@ -627,8 +659,9 @@ void setupWebServer() {
       int newUniverse = doc["sacnUniverse"];
       if (newUniverse != sacnUniverse && newUniverse >= 1 && newUniverse <= 63999) {
         sacnUniverse = newUniverse;
-        propConfig.setSACNUniverse(newUniverse);
+        Serial.printf("SACN Universe changed to %d - will restart SACN\n", newUniverse);
         configChanged = true;
+        // Note: SACN restart will happen after config save
       }
     }
     
@@ -636,7 +669,7 @@ void setupWebServer() {
       int newAddress = doc["dmxStartAddress"];
       if (newAddress != sacnStartAddress && newAddress >= 1 && newAddress <= 512) {
         sacnStartAddress = newAddress;
-        propConfig.setDMXStartAddress(newAddress);
+        Serial.printf("DMX Start Address changed to %d\n", newAddress);
         configChanged = true;
       }
     }
@@ -645,9 +678,9 @@ void setupWebServer() {
       int newBrightness = doc["brightness"];
       if (newBrightness != ledBrightness && newBrightness >= 0 && newBrightness <= 255) {
         ledBrightness = newBrightness;
-        propConfig.setBrightness(newBrightness);
         strip.setBrightness(ledBrightness);
         strip.show(); // Apply brightness change immediately
+        Serial.printf("LED Brightness changed to: %d\n", newBrightness);
         configChanged = true;
       }
     }
@@ -656,7 +689,7 @@ void setupWebServer() {
       String newSSID = doc["wifiSSID"].as<String>();
       if (newSSID != wifiSSID) {
         wifiSSID = newSSID;
-        propConfig.setWiFiSSID(newSSID);
+        Serial.printf("WiFi SSID changed to: %s\n", newSSID.c_str());
         configChanged = true;
       }
     }
@@ -665,12 +698,14 @@ void setupWebServer() {
       String newPassword = doc["wifiPassword"].as<String>();
       if (newPassword != wifiPassword) {
         wifiPassword = newPassword;
-        propConfig.setWiFiPassword(newPassword);
+        Serial.println("WiFi Password changed");
         configChanged = true;
       }
     }
     
     if (configChanged) {
+      Serial.println("Configuration changes detected - preparing to save...");
+      
       // Update the main config struct with all current values
       config.deviceLabel = deviceLabel;
       config.fixtureNumber = fixtureNumber;
@@ -679,14 +714,28 @@ void setupWebServer() {
       config.brightness = ledBrightness;
       config.wifiSSID = wifiSSID;
       config.wifiPassword = wifiPassword;
+      config.deviceType = "defragmentor"; // Ensure device type is set
+      config.numLeds = numLEDs;
+      config.firstBoot = false;
+      
+      Serial.printf("Saving config - Universe: %d, DMX Start: %d, Brightness: %d\n", 
+                    config.sacnUniverse, config.dmxStartAddress, config.brightness);
       
       // Save all changes to NVS
       if (propConfig.saveConfig(config)) {
-        Serial.println("Configuration updated and saved to NVS");
+        Serial.println("Configuration successfully saved to NVS");
+        
+        // Restart SACN if universe changed (to update multicast group)
+        if (WiFi.status() == WL_CONNECTED) {
+          udp.stop(); // Stop current UDP
+          setupSACN(); // Restart with new settings
+          Serial.println("SACN restarted with new configuration");
+        }
       } else {
-        Serial.println("Configuration updated but failed to save to NVS");
+        Serial.println("ERROR: Failed to save configuration to NVS");
       }
       
+      Serial.println("Current configuration after save:");
       propConfig.printConfig();
       request->send(200, "application/json", "{\"status\":\"updated\"}");
     } else {
@@ -712,7 +761,10 @@ void setupWebServer() {
 
 // Configuration management functions
 void loadConfiguration() {
+  Serial.println("Loading configuration from NVS...");
+  
   if (propConfig.loadConfig(config)) {
+    Serial.println("Configuration loaded successfully from NVS");
     deviceId = config.deviceLabel.substring(0, config.deviceLabel.indexOf('_')) + "_" + String(random(1000, 9999));
     deviceLabel = config.deviceLabel;
     sacnUniverse = config.sacnUniverse;
@@ -723,12 +775,16 @@ void loadConfiguration() {
     wifiSSID = config.wifiSSID;
     wifiPassword = config.wifiPassword;
     
+    Serial.printf("Loaded values - Universe: %d, DMX Start: %d, Brightness: %d\n", 
+                  sacnUniverse, sacnStartAddress, ledBrightness);
+    
     if (config.firstBoot) {
-      Serial.println("First boot detected - using defaults");
-      propConfig.setFirstBoot(false);
+      Serial.println("First boot detected - marking as configured");
+      config.firstBoot = false;
+      propConfig.saveConfig(config);
     }
   } else {
-    Serial.println("Failed to load config - using defaults");
+    Serial.println("Failed to load config - initializing defaults");
     // Set defaults for defragmentor
     deviceId = "DEFRAGMENTOR_" + String(random(1000, 9999));
     deviceLabel = "Defragmentor " + String(random(100, 999));
@@ -751,7 +807,12 @@ void loadConfiguration() {
     config.deviceType = "defragmentor";
     config.fixtureNumber = fixtureNumber;
     config.firstBoot = false;
-    propConfig.saveConfig(config);
+    
+    if (propConfig.saveConfig(config)) {
+      Serial.println("Default configuration saved to NVS");
+    } else {
+      Serial.println("Failed to save default configuration to NVS");
+    }
   }
   
   Serial.println("Configuration loaded:");
@@ -789,9 +850,127 @@ void handleGetConfig(AsyncWebServerRequest *request) {
 
 // Send periodic status updates
 void sendPeriodicStatus() {
-  Serial.printf("Status: State=%s, Servo=%d°, Power=%s, WiFi=%s\n", 
+  Serial.printf("Status: State=%s, Servo=%d°, Power=%s, WiFi=%s, SACN=%s\n", 
                 currentState ? "ACTIVE" : "IDLE", 
                 servoPosition,
                 powerEnabled ? "ON" : "OFF",
-                WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+                WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected",
+                sacnEnabled ? "ACTIVE" : "TIMEOUT");
+}
+
+// ========== SACN/E1.31 Implementation ==========
+
+void setupSACN() {
+  Serial.println("Initializing SACN/E1.31 receiver...");
+  
+  // Begin UDP on SACN port
+  if (udp.begin(SACN_PORT)) {
+    Serial.printf("SACN UDP listening on port %d\n", SACN_PORT);
+    
+    // Join multicast group for our universe
+    IPAddress multicastIP(239, 255, 0, sacnUniverse);
+    if (udp.beginMulticast(multicastIP, SACN_PORT)) {
+      Serial.printf("Joined SACN multicast group for universe %d\n", sacnUniverse);
+    } else {
+      Serial.println("Failed to join multicast group");
+    }
+  } else {
+    Serial.println("Failed to begin UDP for SACN");
+  }
+  
+  // Initialize DMX data to zero
+  memset(dmxData, 0, sizeof(dmxData));
+  memset(&idleLEDs, 0, sizeof(idleLEDs));
+  memset(&activeLEDs, 0, sizeof(activeLEDs));
+  
+  Serial.println("SACN setup complete");
+}
+
+void processSACNPacket() {
+  int packetSize = udp.parsePacket();
+  if (packetSize > 0 && packetSize <= SACN_PACKET_SIZE) {
+    udp.read(sacnPacketBuffer, packetSize);
+    
+    if (isSACNPacket(sacnPacketBuffer, packetSize)) {
+      parseSACNData(sacnPacketBuffer);
+      lastSacnUpdate = millis();
+      if (!sacnEnabled) {
+        Serial.println("SACN data received - enabling SACN control");
+        sacnEnabled = true;
+      }
+      updateLEDsFromSACN();
+    }
+  }
+}
+
+bool isSACNPacket(uint8_t* buffer, int length) {
+  // Check minimum packet size
+  if (length < 126) return false;
+  
+  // Check SACN packet identifier
+  const uint8_t sacnID[] = {0x41, 0x53, 0x43, 0x2d, 0x45, 0x31, 0x2e, 0x31, 0x37, 0x00, 0x00, 0x00};
+  if (memcmp(buffer + 4, sacnID, 12) != 0) return false;
+  
+  // Check universe
+  uint16_t universe = (buffer[113] << 8) | buffer[114];
+  if (universe != sacnUniverse) return false;
+  
+  return true;
+}
+
+void parseSACNData(uint8_t* buffer) {
+  // DMX data starts at byte 126 in SACN packet
+  uint8_t* dmx = buffer + 126;
+  
+  // Extract channels for our defragmentor (16 channels starting at sacnStartAddress)
+  int startIdx = sacnStartAddress - 1; // Convert to 0-based indexing
+  
+  for (int i = 0; i < 16 && (startIdx + i) < 512; i++) {
+    dmxData[i] = dmx[startIdx + i];
+  }
+  
+  // Parse idle state LEDs (channels 1-8)
+  idleLEDs[0].r = dmxData[0];   // Channel 1
+  idleLEDs[0].g = dmxData[1];   // Channel 2
+  idleLEDs[0].b = dmxData[2];   // Channel 3
+  idleLEDs[0].w = dmxData[3];   // Channel 4
+  idleLEDs[1].r = dmxData[4];   // Channel 5
+  idleLEDs[1].g = dmxData[5];   // Channel 6
+  idleLEDs[1].b = dmxData[6];   // Channel 7
+  idleLEDs[1].w = dmxData[7];   // Channel 8
+  
+  // Parse active state LEDs (channels 9-16)
+  activeLEDs[0].r = dmxData[8];  // Channel 9
+  activeLEDs[0].g = dmxData[9];  // Channel 10
+  activeLEDs[0].b = dmxData[10]; // Channel 11
+  activeLEDs[0].w = dmxData[11]; // Channel 12
+  activeLEDs[1].r = dmxData[12]; // Channel 13
+  activeLEDs[1].g = dmxData[13]; // Channel 14
+  activeLEDs[1].b = dmxData[14]; // Channel 15
+  activeLEDs[1].w = dmxData[15]; // Channel 16
+}
+
+void updateLEDsFromSACN() {
+  if (!sacnEnabled) {
+    setLEDPattern(); // Fall back to local pattern
+    return;
+  }
+  
+  // Choose LED state based on defragmentor state
+  LEDState* currentLEDs = currentState ? activeLEDs : idleLEDs;
+  
+  // Apply brightness scaling
+  float brightness = ledBrightness / 255.0;
+  
+  // Set LED colors
+  for (int i = 0; i < NUM_LEDS; i++) {
+    uint8_t r = (uint8_t)(currentLEDs[i].r * brightness);
+    uint8_t g = (uint8_t)(currentLEDs[i].g * brightness);
+    uint8_t b = (uint8_t)(currentLEDs[i].b * brightness);
+    uint8_t w = (uint8_t)(currentLEDs[i].w * brightness);
+    
+    strip.setPixelColor(i, strip.Color(g, r, b, w)); // Note: GRB order for NeoPixel
+  }
+  
+  strip.show();
 }

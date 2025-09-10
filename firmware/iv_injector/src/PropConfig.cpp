@@ -16,6 +16,11 @@ const char* PropConfig::KEY_WIFI_SSID = "wifi_ssid";
 const char* PropConfig::KEY_WIFI_PASSWORD = "wifi_pass";
 const char* PropConfig::KEY_FIRST_BOOT = "first_boot";
 const char* PropConfig::KEY_FIXTURE_NUMBER = "fixture_num";
+const char* PropConfig::KEY_USE_DHCP = "use_dhcp";
+const char* PropConfig::KEY_STATIC_IP = "static_ip";
+const char* PropConfig::KEY_STATIC_GATEWAY = "static_gw";
+const char* PropConfig::KEY_STATIC_SUBNET = "static_sub";
+const char* PropConfig::KEY_STATIC_DNS = "static_dns";
 
 PropConfig::PropConfig() {
 }
@@ -44,6 +49,12 @@ bool PropConfig::loadConfig(Config& config) {
     config.wifiPassword = prefs.getString(KEY_WIFI_PASSWORD, "academy123");
     config.firstBoot = prefs.getBool(KEY_FIRST_BOOT, true);
     config.fixtureNumber = prefs.getInt(KEY_FIXTURE_NUMBER, 4);  // Default to 4 for IV injector
+    // Network configuration defaults
+    config.useDHCP = prefs.getBool(KEY_USE_DHCP, true);  // Default to DHCP
+    config.staticIP = prefs.getString(KEY_STATIC_IP, "192.168.1.100");
+    config.staticGateway = prefs.getString(KEY_STATIC_GATEWAY, "192.168.1.1");
+    config.staticSubnet = prefs.getString(KEY_STATIC_SUBNET, "255.255.255.0");
+    config.staticDNS = prefs.getString(KEY_STATIC_DNS, "8.8.8.8");
     
     prefs.end();
     return true;
@@ -65,6 +76,12 @@ bool PropConfig::saveConfig(const Config& config) {
     success &= prefs.putString(KEY_WIFI_PASSWORD, config.wifiPassword);
     success &= prefs.putBool(KEY_FIRST_BOOT, config.firstBoot);
     success &= prefs.putInt(KEY_FIXTURE_NUMBER, config.fixtureNumber);
+    // Network configuration
+    success &= prefs.putBool(KEY_USE_DHCP, config.useDHCP);
+    success &= prefs.putString(KEY_STATIC_IP, config.staticIP);
+    success &= prefs.putString(KEY_STATIC_GATEWAY, config.staticGateway);
+    success &= prefs.putString(KEY_STATIC_SUBNET, config.staticSubnet);
+    success &= prefs.putString(KEY_STATIC_DNS, config.staticDNS);
     
     prefs.end();
     return success;
@@ -82,6 +99,12 @@ bool PropConfig::resetToDefaults() {
     defaultConfig.wifiPassword = "academy123";
     defaultConfig.firstBoot = true;
     defaultConfig.fixtureNumber = 4;
+    // Network defaults
+    defaultConfig.useDHCP = true;
+    defaultConfig.staticIP = "192.168.1.100";
+    defaultConfig.staticGateway = "192.168.1.1";
+    defaultConfig.staticSubnet = "255.255.255.0";
+    defaultConfig.staticDNS = "8.8.8.8";
     
     return saveConfig(defaultConfig);
 }
@@ -247,6 +270,13 @@ String PropConfig::toJSON() {
     doc["firstBoot"] = config.firstBoot;
     doc["fixtureNumber"] = config.fixtureNumber;
     
+    // Network configuration
+    doc["useDHCP"] = config.useDHCP;
+    doc["staticIP"] = config.staticIP;
+    doc["staticGateway"] = config.staticGateway;
+    doc["staticSubnet"] = config.staticSubnet;
+    doc["staticDNS"] = config.staticDNS;
+    
     String json;
     serializeJson(doc, json);
     return json;
@@ -290,6 +320,23 @@ bool PropConfig::fromJSON(const String& json) {
         config.fixtureNumber = doc["fixtureNumber"];
     }
     
+    // Network configuration
+    if (doc.containsKey("useDHCP")) {
+        config.useDHCP = doc["useDHCP"];
+    }
+    if (doc.containsKey("staticIP")) {
+        config.staticIP = doc["staticIP"].as<String>();
+    }
+    if (doc.containsKey("staticGateway")) {
+        config.staticGateway = doc["staticGateway"].as<String>();
+    }
+    if (doc.containsKey("staticSubnet")) {
+        config.staticSubnet = doc["staticSubnet"].as<String>();
+    }
+    if (doc.containsKey("staticDNS")) {
+        config.staticDNS = doc["staticDNS"].as<String>();
+    }
+    
     return saveConfig(config);
 }
 
@@ -310,6 +357,13 @@ void PropConfig::printConfig() {
     Serial.printf("WiFi SSID: %s\n", config.wifiSSID.c_str());
     Serial.printf("Fixture Number: %d\n", config.fixtureNumber);
     Serial.printf("First Boot: %s\n", config.firstBoot ? "true" : "false");
+    
+    Serial.println("--- Network Configuration ---");
+    Serial.printf("Use DHCP: %s\n", config.useDHCP ? "true" : "false");
+    Serial.printf("Static IP: %s\n", config.staticIP.c_str());
+    Serial.printf("Gateway: %s\n", config.staticGateway.c_str());
+    Serial.printf("Subnet: %s\n", config.staticSubnet.c_str());
+    Serial.printf("DNS: %s\n", config.staticDNS.c_str());
     Serial.println("==================================");
 }
 
@@ -326,4 +380,75 @@ bool PropConfig::factoryReset() {
     }
     
     return false;
+}
+
+// Network configuration methods
+bool PropConfig::getUseDHCP() {
+    if (!prefs.begin(NAMESPACE, true)) return true;
+    bool value = prefs.getBool(KEY_USE_DHCP, true);
+    prefs.end();
+    return value;
+}
+
+bool PropConfig::setUseDHCP(bool useDHCP) {
+    if (!prefs.begin(NAMESPACE, false)) return false;
+    bool success = prefs.putBool(KEY_USE_DHCP, useDHCP);
+    prefs.end();
+    return success;
+}
+
+String PropConfig::getStaticIP() {
+    if (!prefs.begin(NAMESPACE, true)) return "192.168.1.100";
+    String value = prefs.getString(KEY_STATIC_IP, "192.168.1.100");
+    prefs.end();
+    return value;
+}
+
+bool PropConfig::setStaticIP(const String& ip) {
+    if (!prefs.begin(NAMESPACE, false)) return false;
+    bool success = prefs.putString(KEY_STATIC_IP, ip);
+    prefs.end();
+    return success;
+}
+
+String PropConfig::getStaticGateway() {
+    if (!prefs.begin(NAMESPACE, true)) return "192.168.1.1";
+    String value = prefs.getString(KEY_STATIC_GATEWAY, "192.168.1.1");
+    prefs.end();
+    return value;
+}
+
+bool PropConfig::setStaticGateway(const String& gateway) {
+    if (!prefs.begin(NAMESPACE, false)) return false;
+    bool success = prefs.putString(KEY_STATIC_GATEWAY, gateway);
+    prefs.end();
+    return success;
+}
+
+String PropConfig::getStaticSubnet() {
+    if (!prefs.begin(NAMESPACE, true)) return "255.255.255.0";
+    String value = prefs.getString(KEY_STATIC_SUBNET, "255.255.255.0");
+    prefs.end();
+    return value;
+}
+
+bool PropConfig::setStaticSubnet(const String& subnet) {
+    if (!prefs.begin(NAMESPACE, false)) return false;
+    bool success = prefs.putString(KEY_STATIC_SUBNET, subnet);
+    prefs.end();
+    return success;
+}
+
+String PropConfig::getStaticDNS() {
+    if (!prefs.begin(NAMESPACE, true)) return "8.8.8.8";
+    String value = prefs.getString(KEY_STATIC_DNS, "8.8.8.8");
+    prefs.end();
+    return value;
+}
+
+bool PropConfig::setStaticDNS(const String& dns) {
+    if (!prefs.begin(NAMESPACE, false)) return false;
+    bool success = prefs.putString(KEY_STATIC_DNS, dns);
+    prefs.end();
+    return success;
 }

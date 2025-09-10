@@ -188,8 +188,10 @@ size_t videoBufferSize = 0;  // Actual allocated buffer size
 bool wifiConnected = false;
 bool videoPlaying = false;
 bool videoLooping = false;
+bool videoResumed = false;  // True when video was resumed from preferences
 bool sdCardInitialized = false;
 String currentVideo = "";
+String currentFolder = "";
 String videoDirectory = "/videos";
 CRGB currentColor = CRGB::Black;
 uint8_t ledBrightness = 128;
@@ -201,7 +203,10 @@ int totalFrames = 1;
 bool bootButtonPressed = false;
 unsigned long bootButtonPressStart = 0;
 bool resetInProgress = false;
-String frameFiles[30]; // Store up to 30 frame files
+
+// Streaming video system - no large arrays, generate paths dynamically
+String currentVideoFolder = "";  // Folder containing frames for streaming playback
+int maxFramesInFolder = 0;       // Total frames available in current folder
 bool isAnimatedSequence = false;
 
 // Timing variables
@@ -320,6 +325,13 @@ void handleRestart();
 void handleGetVideos();
 void handleFileUpload();
 void handleNotFound();
+
+// Folder-based video functions
+bool playVideoFromFolder(String folderName);
+String getFirstVideoInFolder(String folderName);
+String getFolderVideoList();
+void handlePlayFolder();
+void resumeLastVideo();
 
 void setup() {
   Serial.begin(115200);
@@ -628,36 +640,61 @@ void setup() {
       Serial.println("Created /videos directory");
     }
     
+    // Create numbered folders 1-10 and GS if they don't exist
+    String folders[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "GS"};
+    int folderCount = sizeof(folders) / sizeof(folders[0]);
+    for (int i = 0; i < folderCount; i++) {
+      String folderPath = videoDirectory + "/" + folders[i];
+      if (!SD.exists(folderPath)) {
+        SD.mkdir(folderPath);
+        Serial.printf("Created folder: %s\n", folderPath.c_str());
+      }
+    }
+    
     // List available videos
     listVideos();
+    
+    // Resume last played video after a delay
+    resumeLastVideo();
   } else {
     Serial.println("SD card initialization failed!");
   }
   
   // Update the boot screen with final status instead of separate screen
+  // Always show boot status for user feedback, regardless of video resume
+  Serial.println("=== CALLING updateBootScreenWithStatus() ===");
   updateBootScreenWithStatus();
   
-  Serial.println("Setup complete!");
+  // Show boot status for 3 seconds so user can see WiFi and SD card status
+  Serial.println("Displaying boot status for 3 seconds...");
+  delay(3000);
+  Serial.println("Boot status display period complete");
   
-  // Auto-display test image after boot
-  Serial.println("Auto-displaying SFA2_202_211_Med_Tricorder_BODY.jpg after boot...");
-  if (sdCardInitialized && videoCommandQueue) {
-    VideoCommand autoCmd;
-    autoCmd.type = VideoCommand::DISPLAY_IMAGE;
-    strncpy(autoCmd.filename, "SFA2_202_211_Med_Tricorder_BODY.jpg", sizeof(autoCmd.filename) - 1);
-    autoCmd.filename[sizeof(autoCmd.filename) - 1] = '\0';
-    
-    // Give the tasks a moment to start up, then send the command
-    delay(1000);
-    BaseType_t result = xQueueSend(videoCommandQueue, &autoCmd, pdMS_TO_TICKS(2000));
-    if (result == pdPASS) {
-      Serial.println("Auto-display command queued successfully");
+  // Auto-display test image after boot (only if no video resumed)
+  if (!videoResumed) {
+    Serial.println("Auto-displaying SFA2_202_211_Med_Tricorder_BODY.jpg after boot...");
+    if (sdCardInitialized && videoCommandQueue) {
+      VideoCommand autoCmd;
+      autoCmd.type = VideoCommand::DISPLAY_IMAGE;
+      strncpy(autoCmd.filename, "SFA2_202_211_Med_Tricorder_BODY.jpg", sizeof(autoCmd.filename) - 1);
+      autoCmd.filename[sizeof(autoCmd.filename) - 1] = '\0';
+      
+      // Give the tasks a moment to start up, then send the command
+      delay(1000);
+      BaseType_t result = xQueueSend(videoCommandQueue, &autoCmd, pdMS_TO_TICKS(2000));
+      if (result == pdPASS) {
+        Serial.println("Auto-display command queued successfully");
+      } else {
+        Serial.println("Failed to queue auto-display command");
+      }
     } else {
-      Serial.println("Failed to queue auto-display command");
+      Serial.println("Cannot auto-display: SD card not initialized or video queue not ready");
     }
   } else {
-    Serial.println("Cannot auto-display: SD card not initialized or video queue not ready");
+    Serial.println("Skipping boot screens - video was resumed");
   }
+  
+  Serial.println("Setup complete!");
 }
 
 void loop() {
@@ -715,8 +752,16 @@ void displayInitializationScreen() {
 }
 
 void updateBootScreenWithStatus() {
+  Serial.println("=== UPDATING BOOT SCREEN WITH STATUS ===");
   // Update the boot screen with status info using the existing black center area
-  // Don't clear anything - just write text in the designated black space
+  // Draw a black background first to ensure text visibility
+  
+  // Clear the center area with a black background for better text visibility
+  int boxX = 40;
+  int boxY = 60;
+  int boxWidth = 160;
+  int boxHeight = 200;
+  tft.fillRect(boxX, boxY, boxWidth, boxHeight, TFT_BLACK);
   
   // Set text properties for the LCARS center display area
   tft.setTextSize(1);
@@ -725,10 +770,13 @@ void updateBootScreenWithStatus() {
   int lineHeight = 14; // Line spacing
   int currentLine = 0;
   
+  Serial.printf("Drawing status at position %d,%d\n", textX, textY);
+  
   // Header - Device info
   tft.setTextColor(TFT_CYAN);
   tft.setCursor(textX, textY + (currentLine * lineHeight));
   tft.printf("%s", tricorderConfig.getDeviceLabel());
+  Serial.printf("Wrote device label: %s\n", tricorderConfig.getDeviceLabel());
   currentLine += 1;
   
   tft.setTextColor(TFT_WHITE);
@@ -793,6 +841,8 @@ void updateBootScreenWithStatus() {
   tft.setTextColor(TFT_GREEN);
   tft.setCursor(textX, textY + (currentLine * lineHeight));
   tft.println("SYSTEM READY");
+  
+  Serial.println("=== BOOT STATUS DISPLAY COMPLETE ===");
 }
 
 // LED Task - Runs on Core 1 for real-time LED control
@@ -1704,6 +1754,7 @@ void sendStatus(String commandId) {
   doc["sdCardInitialized"] = sdCardInitialized;
   doc["videoPlaying"] = videoPlaying;
   doc["currentVideo"] = currentVideo;
+  doc["currentFolder"] = currentFolder;
   doc["videoLooping"] = videoLooping;
   doc["currentFrame"] = currentFrame;
   
@@ -1884,6 +1935,8 @@ bool playVideo(String filename, bool loop) {
   
   // Reset animation state
   totalFrames = 0;
+  maxFramesInFolder = 0;
+  currentVideoFolder = "";
   isAnimatedSequence = false;
   
   // Check if this is a folder-based animation
@@ -1895,51 +1948,44 @@ bool playVideo(String filename, bool loop) {
     if (testDir && testDir.isDirectory()) {
       testDir.close();
       
-      // Load all JPEG files from the folder
-      File animDir = SD.open(folderPath);
-      if (!animDir) {
-        Serial.printf("Failed to open animation folder: %s\n", folderPath.c_str());
-        return false;
-      }
+      Serial.printf("Streaming folder-based animation from: %s\n", folderPath.c_str());
       
-      // Collect all frame files
-      File file = animDir.openNextFile();
-      while (file && totalFrames < 30) {
-        if (!file.isDirectory()) {
-          String frameFile = file.name();
-          if (frameFile.endsWith(".jpg") || frameFile.endsWith(".jpeg") || 
-              frameFile.endsWith(".JPG") || frameFile.endsWith(".JPEG")) {
-            frameFiles[totalFrames] = folderPath + "/" + frameFile;
-            totalFrames++;
-            Serial.printf("Added frame %d: %s\n", totalFrames, frameFile.c_str());
+      // Count frames by testing for sequential frame files
+      // This avoids loading all filenames into memory
+      int frameCount = 0;
+      for (int i = 1; i <= 1000; i++) {  // Test up to 1000 frames
+        String framePath = folderPath + "/frame_" + String(i).c_str();
+        
+        // Pad frame number to 3 digits
+        if (i < 10) framePath = folderPath + "/frame_00" + String(i) + ".jpg";
+        else if (i < 100) framePath = folderPath + "/frame_0" + String(i) + ".jpg";
+        else framePath = folderPath + "/frame_" + String(i) + ".jpg";
+        
+        if (SD.exists(framePath)) {
+          frameCount = i;  // Update to highest found frame
+          if (i <= 10) {  // Only log first 10 for debugging
+            Serial.printf("Found frame %d: %s\n", i, framePath.c_str());
+          }
+        } else {
+          // If we haven't found any frames yet, try different patterns
+          if (frameCount == 0) {
+            // Try alternative naming patterns
+            continue;
+          } else {
+            // Found some frames, this appears to be the end
+            break;
           }
         }
-        file = animDir.openNextFile();
-      }
-      animDir.close();
-      
-      // Sort frame files to ensure correct playback order
-      if (totalFrames > 1) {
-        for (int i = 0; i < totalFrames - 1; i++) {
-          for (int j = i + 1; j < totalFrames; j++) {
-            if (frameFiles[i] > frameFiles[j]) {
-              String temp = frameFiles[i];
-              frameFiles[i] = frameFiles[j];
-              frameFiles[j] = temp;
-            }
-          }
-        }
-        Serial.println("Sorted frame files:");
-        for (int i = 0; i < totalFrames; i++) {
-          Serial.printf("  Frame %d: %s\n", i, frameFiles[i].c_str());
-        }
       }
       
-      Serial.printf("Animation loaded: %d frames total\n", totalFrames);
-      
-      if (totalFrames > 0) {
+      if (frameCount > 0) {
+        // Successfully found frames using streaming approach
+        currentVideoFolder = folderPath;
+        maxFramesInFolder = frameCount;
+        totalFrames = frameCount;
         isAnimatedSequence = true;
-        Serial.printf("Loaded %d frames for animation: %s\n", totalFrames, filename.c_str());
+        
+        Serial.printf("Streaming animation: %d frames in folder %s\n", totalFrames, filename.c_str());
         
         // Set video state for animation
         videoPlaying = true;
@@ -1950,7 +1996,7 @@ bool playVideo(String filename, bool loop) {
         
         return true;
       } else {
-        Serial.printf("No JPEG files found in folder: %s\n", folderPath.c_str());
+        Serial.printf("No sequential frame files found in folder: %s\n", folderPath.c_str());
         return false;
       }
     }
@@ -2018,9 +2064,10 @@ bool playVideo(String filename, bool loop) {
     return false;
   }
   
-  // Single file mode - just store the path in frameFiles[0]
-  frameFiles[0] = fullPath;
+  // Single file mode - store path in currentVideoFolder for compatibility
+  currentVideoFolder = fullPath;  // Store full path for single images
   totalFrames = 1;
+  maxFramesInFolder = 1;
   isAnimatedSequence = false;
   
   Serial.printf("Starting single image playback: %s -> %s (Loop: %s)\n", 
@@ -2042,27 +2089,27 @@ void stopVideo() {
     videoLooping = false;
     currentFrame = 0;
     totalFrames = 0;
+    maxFramesInFolder = 0;
+    currentVideoFolder = "";
     isAnimatedSequence = false;
-    
-    // Clear frame files array
-    for (int i = 0; i < 30; i++) {
-      frameFiles[i] = "";
-    }
     
     // Close video file if it was opened (legacy single file mode)
     if (videoFile) {
       videoFile.close();
     }
     
-    // Clear screen and show status
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(2);
-    tft.setCursor(10, 100);
-    tft.println("Video Stopped");
+    // Keep the last frame displayed - don't clear the screen
+    // The last displayed content will remain visible until new content is played
     
     Serial.printf("Video stopped: %s\n", currentVideo.c_str());
     currentVideo = "";
+    currentFolder = "";
+    
+    // Clear the last played folder preference
+    Preferences prefs;
+    prefs.begin("tricorder", false);
+    prefs.remove("lastFolder");
+    prefs.end();
   }
 }
 
@@ -2123,15 +2170,33 @@ void showVideoFrame() {
     return;
   }
   
-  // Get the current frame file path
-  String currentFramePath = frameFiles[currentFrame];
-  Serial.printf("Attempting to show frame %d: %s\n", currentFrame, currentFramePath.c_str());
+  // Generate current frame path dynamically (streaming approach)
+  String currentFramePath;
+  if (isAnimatedSequence && currentVideoFolder != "") {
+    // Generate path for sequential frames: frame_001.jpg, frame_002.jpg, etc.
+    int frameNum = currentFrame + 1;  // Frame numbering starts from 1
+    if (frameNum < 10) {
+      currentFramePath = currentVideoFolder + "/frame_00" + String(frameNum) + ".jpg";
+    } else if (frameNum < 100) {
+      currentFramePath = currentVideoFolder + "/frame_0" + String(frameNum) + ".jpg";
+    } else {
+      currentFramePath = currentVideoFolder + "/frame_" + String(frameNum) + ".jpg";
+    }
+  } else if (!isAnimatedSequence && currentVideoFolder != "") {
+    // Single image mode - currentVideoFolder contains the full file path
+    currentFramePath = currentVideoFolder;
+  } else {
+    Serial.println("ERROR: No valid frame path generation method");
+    return;
+  }
+  
+  Serial.printf("Attempting to show frame %d: %s\n", currentFrame + 1, currentFramePath.c_str());
   
   // Open and display the current frame
   File frameFile = SD.open(currentFramePath, FILE_READ);
   if (!frameFile) {
     Serial.printf("ERROR: Failed to open frame file: %s\n", currentFramePath.c_str());
-    Serial.printf("This was frame %d of %d\n", currentFrame, totalFrames);
+    Serial.printf("This was frame %d of %d\n", currentFrame + 1, totalFrames);
     
     // Skip this frame and try the next one
     currentFrame++;
@@ -2171,8 +2236,9 @@ void showVideoFrame() {
       int xOffset = (width < 240) ? (240 - width) / 2 : 0;
       int yOffset = (height < 320) ? (320 - height) / 2 : 0;
       
-      // Clear screen only when ready to display new frame
-      if (currentFrame == 0 || isAnimatedSequence) {
+      // Clear screen only for the first frame of a new video (not for animated sequences)
+      // For animated sequences, frames should overwrite each other without clearing
+      if (currentFrame == 0 && !isAnimatedSequence) {
         tft.fillScreen(TFT_BLACK);
       }
       
@@ -2238,138 +2304,117 @@ bool listVideos() {
 }
 
 String getVideoList() {
-  String videoList = "";
+  return getFolderVideoList();
+}
+
+// New folder-based video functions
+String getFolderVideoList() {
+  String result = "[";
   
   if (!sdCardInitialized) {
-    return "SD card not initialized";
+    return "[{\"error\":\"SD card not initialized\"}]";
   }
   
-  File dir = SD.open(videoDirectory);
-  if (!dir) {
-    return "Failed to open videos directory";
-  }
+  // Check for folders 1-10 and GS
+  String folders[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "GS"};
+  int folderCount = sizeof(folders) / sizeof(folders[0]);
+  bool first = true;
   
-  File item = dir.openNextFile();
-  int folderCount = 0;
-  int fileCount = 0;
-  String folders[20]; // Store up to 20 folder names
-  String uniqueFiles[20]; // Store up to 20 unique file names
-  int uniqueFileCount = 0;
-  
-  while (item) {
-    String itemName = item.name();
+  for (int i = 0; i < folderCount; i++) {
+    String folderPath = videoDirectory + "/" + folders[i];
+    File dir = SD.open(folderPath);
     
-    if (item.isDirectory()) {
-      // This is a folder - check if it contains JPEG files
-      String folderPath = videoDirectory + "/" + itemName;
-      File subDir = SD.open(folderPath);
-      if (subDir) {
-        File subFile = subDir.openNextFile();
-        bool hasJpegs = false;
-        while (subFile && !hasJpegs) {
-          if (!subFile.isDirectory()) {
-            String subFileName = subFile.name();
-            if (subFileName.endsWith(".jpg") || subFileName.endsWith(".jpeg") || 
-                subFileName.endsWith(".JPG") || subFileName.endsWith(".JPEG")) {
-              hasJpegs = true;
-            }
-          }
-          subFile = subDir.openNextFile();
-        }
-        subDir.close();
-        
-        if (hasJpegs && folderCount < 20) {
-          folders[folderCount] = itemName;
-          folderCount++;
-        }
+    if (dir && dir.isDirectory()) {
+      String firstVideo = getFirstVideoInFolder(folders[i]);
+      
+      if (!first) result += ",";
+      result += "{";
+      result += "\"folder\":\"" + folders[i] + "\",";
+      result += "\"hasContent\":";
+      result += (firstVideo != "" ? "true" : "false");
+      if (firstVideo != "") {
+        result += ",\"firstFile\":\"" + firstVideo + "\"";
       }
-    } else {
-      // This is a file - check if it's a JPEG
-      if (itemName.endsWith(".jpg") || itemName.endsWith(".jpeg") || 
-          itemName.endsWith(".JPG") || itemName.endsWith(".JPEG")) {
-        
-        // Extract base name (remove frame numbers and extensions)
-        String baseName = itemName;
-        
-        // Remove common frame suffixes like _001, _frame_001, etc.
-        int framePos = baseName.indexOf("_frame_");
-        if (framePos == -1) framePos = baseName.lastIndexOf("_");
-        
-        if (framePos > 0) {
-          String suffix = baseName.substring(framePos + 1);
-          // Check if suffix is numeric (frame number)
-          bool isNumeric = true;
-          for (int i = 0; i < suffix.length(); i++) {
-            char c = suffix.charAt(i);
-            if (c < '0' || c > '9') {
-              if (c != '.' && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z')) {
-                isNumeric = false;
-                break;
-              }
-            }
-          }
-          if (isNumeric || suffix.startsWith("00") || suffix.startsWith("frame")) {
-            baseName = baseName.substring(0, framePos);
-          }
-        }
-        
-        // Remove file extension
-        int dotPos = baseName.lastIndexOf(".");
-        if (dotPos > 0) {
-          baseName = baseName.substring(0, dotPos);
-        }
-        
-        // Check if this base name is already in our list
-        bool found = false;
-        for (int i = 0; i < uniqueFileCount; i++) {
-          if (uniqueFiles[i] == baseName) {
-            found = true;
-            break;
-          }
-        }
-        
-        // Add to unique list if not found
-        if (!found && uniqueFileCount < 20) {
-          uniqueFiles[uniqueFileCount] = baseName;
-          uniqueFileCount++;
-        }
-        
-        fileCount++;
+      result += "}";
+      first = false;
+      
+      dir.close();
+    }
+  }
+  
+  result += "]";
+  return result;
+}
+
+String getFirstVideoInFolder(String folderName) {
+  String folderPath = videoDirectory + "/" + folderName;
+  File dir = SD.open(folderPath);
+  
+  if (!dir || !dir.isDirectory()) {
+    return "";
+  }
+  
+  File file = dir.openNextFile();
+  while (file) {
+    if (!file.isDirectory()) {
+      String fileName = file.name();
+      if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg") || 
+          fileName.endsWith(".JPG") || fileName.endsWith(".JPEG")) {
+        dir.close();
+        return fileName;
       }
     }
-    item = dir.openNextFile();
+    file = dir.openNextFile();
   }
   
   dir.close();
-  
-  if (folderCount == 0 && uniqueFileCount == 0) {
-    videoList = "No videos found. Create folders with JPEG sequences or place JPEG files in /videos";
-  } else {
-    videoList = "";
-    
-    if (folderCount > 0) {
-      videoList += String(folderCount) + " animations: ";
-      for (int i = 0; i < folderCount; i++) {
-        if (i > 0) videoList += ", ";
-        videoList += folders[i];
-      }
-    }
-    
-    if (uniqueFileCount > 0) {
-      if (folderCount > 0) videoList += " | ";
-      videoList += String(uniqueFileCount) + " images: ";
-      for (int i = 0; i < uniqueFileCount; i++) {
-        if (i > 0) videoList += ", ";
-        videoList += uniqueFiles[i];
-      }
-    }
-    
-    if (fileCount > 0) {
-      videoList += " (" + String(fileCount) + " total files)";
-    }
+  return "";
+}
+
+bool playVideoFromFolder(String folderName) {
+  String firstVideo = getFirstVideoInFolder(folderName);
+  if (firstVideo == "") {
+    Serial.printf("No video files found in folder: %s\n", folderName.c_str());
+    return false;
   }
   
-  return videoList;
+  currentFolder = folderName;
+  
+  // Save the last played folder for resume on boot
+  Preferences prefs;
+  prefs.begin("tricorder", false);
+  prefs.putString("lastFolder", folderName);
+  prefs.end();
+  
+  Serial.printf("Playing folder-based animation from folder %s (first frame: %s)\n", folderName.c_str(), firstVideo.c_str());
+  return playVideo(folderName, true); // Pass folder name directly for folder-based animation
+}
+
+void resumeLastVideo() {
+  Serial.println("=== RESUME LAST VIDEO START ===");
+  Preferences prefs;
+  prefs.begin("tricorder", true);
+  String lastFolder = prefs.getString("lastFolder", "");
+  prefs.end();
+  
+  Serial.printf("Last folder from preferences: '%s'\n", lastFolder.c_str());
+  videoResumed = false;  // Reset flag
+  
+  if (lastFolder != "" && sdCardInitialized) {
+    Serial.printf("Resuming last video from folder: %s\n", lastFolder.c_str());
+    delay(1000); // Give system time to stabilize
+    playVideoFromFolder(lastFolder);
+    videoResumed = true;  // Set flag when video is resumed
+    Serial.println("Video resume flag set - skipping boot screens");
+  } else {
+    if (lastFolder == "") {
+      Serial.println("No last folder saved - first time boot or no previous video");
+    }
+    if (!sdCardInitialized) {
+      Serial.println("SD card not initialized - cannot resume video");
+    }
+  }
+  Serial.println("=== RESUME LAST VIDEO END ===");
 }
 
 bool displayStaticImage(String filename) {
@@ -2694,165 +2739,25 @@ bool displayBootImage(String filename) {
   return false;
 }
 
-// Battery monitoring functions
+// Battery monitoring functions (disabled for performance)
 void initializeBatteryMonitoring() {
-  Serial.println("=== INITIALIZING BATTERY MONITORING ===");
-  
-  // Configure ADC pin as input
-  pinMode(BATTERY_PIN, INPUT);
-  Serial.printf("Battery monitoring pin GPIO%d configured as INPUT\n", BATTERY_PIN);
-  
-  // Set ADC width to 12 bits
-  analogReadResolution(12);
-  Serial.println("ADC resolution set to 12 bits (0-4095)");
-  
-  // Set ADC attenuation for wider voltage range (0-3.3V)
-  analogSetAttenuation(ADC_11db);  // ADC_11db = 0-3.3V range
-  Serial.println("ADC attenuation set to 11dB (0-3.3V range)");
-  
-  // Attach pin to ADC
-  adcAttachPin(BATTERY_PIN);
-  Serial.printf("ADC explicitly attached to GPIO%d\n", BATTERY_PIN);
-  
-  // Warm up the ADC with multiple reads
-  Serial.println("Warming up ADC with multiple reads...");
-  for (int i = 0; i < 10; i++) {
-    int warmupRead = analogRead(BATTERY_PIN);
-    Serial.printf("Warmup read %d: %d (%.3fV)\n", i+1, warmupRead, (warmupRead/4095.0)*3.3);
-    delay(50); // Longer delay for ADC to settle
-  }
-  
-  // Test immediate reading
-  int testRead = analogRead(BATTERY_PIN);
-  float testVoltage = (testRead / 4095.0) * 3.3 * BATTERY_VOLTAGE_DIVIDER;
-  Serial.printf("Initial test reading: %d ADC = %.3fV battery\n", testRead, testVoltage);
-  
-  Serial.println("Battery monitoring initialization complete");
-  Serial.println("========================================\n");
+  // Battery monitoring disabled for performance optimization
+  Serial.println("Battery monitoring disabled for performance");
 }
 
 float readBatteryVoltage() {
-  // Read ADC value multiple times for better accuracy
-  int adcSum = 0;
-  const int samples = 10;
-  
-  Serial.printf("=== BATTERY MONITORING DEBUG ===\n");
-  Serial.printf("Primary battery pin: GPIO%d\n", BATTERY_PIN);
-  Serial.printf("Voltage divider ratio: %.1f\n", BATTERY_VOLTAGE_DIVIDER);
-  Serial.printf("Expected range: %.1fV - %.1fV\n", BATTERY_MIN_VOLTAGE, BATTERY_MAX_VOLTAGE);
-  
-  // Test multiple ADC pins that might be used for battery monitoring
-  int testPins[] = {34, 35, 36, 39, 32, 33}; // Common ADC pins
-  String pinNames[] = {"GPIO34 (ADC1_CH6)", "GPIO35 (ADC1_CH7)", "GPIO36 (ADC1_CH0)", "GPIO39 (ADC1_CH3)", "GPIO32 (ADC1_CH4)", "GPIO33 (ADC1_CH5)"};
-  
-  Serial.println("Testing all possible ADC pins...");
-  analogSetAttenuation(ADC_11db);  // 0-3.3V range
-  
-  for (int i = 0; i < 6; i++) {
-    int testPin = testPins[i];
-    int reading = analogRead(testPin);
-    float voltage = (reading / 4095.0) * 3.3;
-    Serial.printf("%s: ADC=%d, Voltage=%.3fV\n", pinNames[i].c_str(), reading, voltage);
-  }
-  
-  // Continue with original pin testing
-  Serial.printf("\nFocusing on primary pin GPIO%d...\n", BATTERY_PIN);
-  
-  // Test different attenuation settings
-  Serial.println("Testing ADC configurations...");
-  
-  // Try different attenuation settings
-  analogSetAttenuation(ADC_0db);   // 0-1.1V
-  int test_0db = analogRead(BATTERY_PIN);
-  Serial.printf("ADC_0db (0-1.1V): %d\n", test_0db);
-  
-  analogSetAttenuation(ADC_2_5db); // 0-1.5V  
-  int test_2_5db = analogRead(BATTERY_PIN);
-  Serial.printf("ADC_2_5db (0-1.5V): %d\n", test_2_5db);
-  
-  analogSetAttenuation(ADC_6db);   // 0-2.2V
-  int test_6db = analogRead(BATTERY_PIN);
-  Serial.printf("ADC_6db (0-2.2V): %d\n", test_6db);
-  
-  analogSetAttenuation(ADC_11db);  // 0-3.3V
-  int test_11db = analogRead(BATTERY_PIN);
-  Serial.printf("ADC_11db (0-3.3V): %d\n", test_11db);
-  
-  // Use 11dB attenuation for widest range
-  analogSetAttenuation(ADC_11db);
-  
-  for (int i = 0; i < samples; i++) {
-    int reading = analogRead(BATTERY_PIN);
-    adcSum += reading;
-    Serial.printf("ADC reading %d: %d\n", i+1, reading);
-    delay(1);
-  }
-  
-  float adcValue = adcSum / samples;
-  Serial.printf("Average ADC value: %.2f (out of 4095)\n", adcValue);
-  
-  // Convert ADC reading to voltage
-  // ESP32 ADC: 12-bit (0-4095) with 3.3V reference
-  float voltage = (adcValue / 4095.0) * 3.3;
-  Serial.printf("Raw ADC voltage: %.3fV\n", voltage);
-  
-  // Account for voltage divider if present
-  voltage *= BATTERY_VOLTAGE_DIVIDER;
-  Serial.printf("Final battery voltage: %.3fV (after divider correction)\n", voltage);
-  
-  // Additional diagnostics
-  if (adcValue == 0) {
-    Serial.println("WARNING: ADC reading is 0 - possible issues:");
-    Serial.println("  - No voltage on GPIO34");
-    Serial.println("  - GPIO34 not connected to battery circuit");
-    Serial.println("  - ADC not properly initialized");
-    Serial.println("  - Wrong GPIO pin for this board");
-  } else if (adcValue >= 4095) {
-    Serial.println("WARNING: ADC reading is maximum (4095) - possible issues:");
-    Serial.println("  - Voltage too high for current attenuation");
-    Serial.println("  - Short circuit or connection issue");
-  }
-  
-  Serial.printf("=== END BATTERY DEBUG ===\n");
-  
-  return voltage;
+  // Battery monitoring disabled for performance - return fixed value indicating USB power
+  return 5.0; // Indicates USB/external power (above typical battery range)
 }
 
 int getBatteryPercentage() {
-  float voltage = readBatteryVoltage();
-  
-  // Convert voltage to percentage
-  if (voltage >= BATTERY_MAX_VOLTAGE) {
-    return 100;
-  } else if (voltage <= BATTERY_MIN_VOLTAGE) {
-    return 0;
-  } else {
-    float percentage = ((voltage - BATTERY_MIN_VOLTAGE) / (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100.0;
-    int result = (int)percentage;
-    Serial.printf("Calculated battery percentage: %d%%\n", result);
-    return result;
-  }
+  // Battery monitoring disabled for performance - return fixed 100%
+  return 100;
 }
 
 String getBatteryStatus() {
-  int percentage = getBatteryPercentage();
-  float voltage = readBatteryVoltage();
-
-  String status;
-  if (percentage >= 75) {
-    status = "High";
-  } else if (percentage >= 50) {
-    status = "Good";
-  } else if (percentage >= 25) {
-    status = "Low";
-  } else if (percentage >= 10) {
-    status = "Critical";
-  } else {
-    status = "Very Low";
-  }
-
-  Serial.printf("Battery status: %s (%d%%, %.2fV)\n", status.c_str(), percentage, voltage);
-  return status;
+  // Battery monitoring disabled for performance - return fixed status
+  return "External Power (100%, 5.00V)";
 }
 
 // ===== ENHANCED WEB SERVER FUNCTIONS =====
@@ -2869,6 +2774,7 @@ void setupWebServer() {
   webServer.on("/api/factory-reset", HTTP_POST, handleFactoryReset);
   webServer.on("/api/restart", HTTP_POST, handleRestart);
   webServer.on("/api/videos", HTTP_GET, handleGetVideos);
+  webServer.on("/api/play-folder", HTTP_POST, handlePlayFolder);
   
   // File upload for videos (if needed)
   webServer.on("/upload", HTTP_POST, []() {
@@ -2911,6 +2817,19 @@ void handleRoot() {
   html += "<a href='/api/status' class='btn'>📊 Status API</a>";
   html += "<a href='/api/videos' class='btn'>🎬 Available Videos</a>";
   
+  html += "<h3>Video Folders</h3>";
+  html += "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:20px 0;'>";
+  for (int i = 1; i <= 10; i++) {
+    html += "<button class='btn' onclick='playFolder(\"" + String(i) + "\")'>" + String(i) + "</button>";
+  }
+  html += "</div>";
+  html += "<button class='btn' onclick='playFolder(\"GS\")' style='background:#28a745;width:100%;margin:10px 0;'>🟢 Green Screen (GS)</button>";
+  html += "<button class='btn' onclick='stopVideo()' style='background:#dc3545;width:100%;margin:10px 0;'>⏹️ Stop Video</button>";
+  
+  if (currentFolder != "") {
+    html += "<p style='text-align:center;color:#666;'>Currently playing: Folder " + currentFolder + "</p>";
+  }
+  
   html += "<h3>Actions</h3>";
   html += "<button class='btn' onclick='restart()'>🔄 Restart Device</button>";
   html += "<button class='btn' onclick='factoryReset()' style='background:#dc3545;'>⚠️ Factory Reset</button>";
@@ -2931,6 +2850,16 @@ void handleRoot() {
   html += "<script>";
   html += "function restart() { if(confirm('Restart device?')) fetch('/api/restart', {method:'POST'}); }";
   html += "function factoryReset() { if(confirm('Factory reset? This will erase all settings!')) fetch('/api/factory-reset', {method:'POST'}); }";
+  html += "function playFolder(folder) { ";
+  html += "  fetch('/api/play-folder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({folder:folder})})";
+  html += "  .then(response => response.text())";
+  html += "  .then(data => { console.log('Playing folder:', folder); })";
+  html += "  .catch(error => console.error('Error:', error)); }";
+  html += "function stopVideo() { ";
+  html += "  fetch('/api/play-folder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'stop'})})";
+  html += "  .then(response => response.text())";
+  html += "  .then(data => { console.log('Video stopped'); })";
+  html += "  .catch(error => console.error('Error:', error)); }";
   html += "</script>";
   
   html += "</body></html>";
@@ -3098,6 +3027,7 @@ void handleGetStatus() {
   doc["wifiConnected"] = wifiConnected;
   doc["sdCardInitialized"] = sdCardInitialized;
   doc["currentVideo"] = currentVideo;
+  doc["currentFolder"] = currentFolder;
   doc["videoPlaying"] = videoPlaying;
   doc["batteryVoltage"] = readBatteryVoltage();
   doc["batteryPercentage"] = getBatteryPercentage();
@@ -3131,6 +3061,55 @@ void handleRestart() {
 void handleGetVideos() {
   String videoList = getVideoList();
   webServer.send(200, "application/json", videoList);
+}
+
+void handlePlayFolder() {
+  Serial.println("=== HANDLE PLAY FOLDER CALLED ===");
+  
+  if (!webServer.hasArg("plain")) {
+    Serial.println("ERROR: No body provided");
+    webServer.send(400, "text/plain", "No body provided");
+    return;
+  }
+  
+  String body = webServer.arg("plain");
+  Serial.printf("Received body: %s\n", body.c_str());
+  
+  DynamicJsonDocument doc(256);
+  DeserializationError error = deserializeJson(doc, body);
+  
+  if (error) {
+    Serial.printf("JSON parsing error: %s\n", error.c_str());
+    webServer.send(400, "text/plain", "Invalid JSON");
+    return;
+  }
+  
+  if (doc.containsKey("action") && doc["action"] == "stop") {
+    Serial.println("Stopping video");
+    stopVideo();
+    currentFolder = "";
+    webServer.send(200, "text/plain", "Video stopped");
+    return;
+  }
+  
+  if (!doc.containsKey("folder")) {
+    Serial.println("ERROR: No folder specified in JSON");
+    webServer.send(400, "text/plain", "No folder specified");
+    return;
+  }
+  
+  String folder = doc["folder"];
+  Serial.printf("=== ATTEMPTING TO PLAY FOLDER: %s ===\n", folder.c_str());
+  
+  if (playVideoFromFolder(folder)) {
+    Serial.printf("SUCCESS: Playing folder %s\n", folder.c_str());
+    webServer.send(200, "text/plain", "Playing folder " + folder);
+  } else {
+    Serial.printf("FAILED: No content found in folder %s\n", folder.c_str());
+    webServer.send(404, "text/plain", "No content found in folder " + folder);
+  }
+  
+  Serial.println("=== HANDLE PLAY FOLDER COMPLETE ===");
 }
 
 void handleFileUpload() {

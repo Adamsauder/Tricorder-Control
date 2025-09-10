@@ -25,6 +25,11 @@ private:
     static const char* KEY_WIFI_PASSWORD;
     static const char* KEY_FIRST_BOOT;
     static const char* KEY_FIXTURE_NUMBER;
+    static const char* KEY_USE_DHCP;
+    static const char* KEY_STATIC_IP;
+    static const char* KEY_STATIC_GATEWAY;
+    static const char* KEY_STATIC_SUBNET;
+    static const char* KEY_STATIC_DNS;
 
 public:
     struct Config {
@@ -38,6 +43,12 @@ public:
         String wifiPassword;
         bool firstBoot;
         int fixtureNumber;
+        // Network configuration
+        bool useDHCP;
+        String staticIP;
+        String staticGateway;
+        String staticSubnet;
+        String staticDNS;
     };
 
     PropConfig();
@@ -74,6 +85,22 @@ public:
     
     String getWiFiPassword();
     bool setWiFiPassword(const String& password);
+    
+    // Network configuration
+    bool getUseDHCP();
+    bool setUseDHCP(bool useDHCP);
+    
+    String getStaticIP();
+    bool setStaticIP(const String& ip);
+    
+    String getStaticGateway();
+    bool setStaticGateway(const String& gateway);
+    
+    String getStaticSubnet();
+    bool setStaticSubnet(const String& subnet);
+    
+    String getStaticDNS();
+    bool setStaticDNS(const String& dns);
     
     // Fixture configuration
     int getFixtureNumber();

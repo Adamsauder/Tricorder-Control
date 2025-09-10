@@ -200,7 +200,7 @@ class TricorderServer:
                 device_type = 'polyinoculator'
             elif device_id.startswith('DEFRAGMENTOR_') or device_id.startswith('DEFRAG'):
                 device_type = 'defragmentor'
-            elif device_id.startswith('IV_INJECTOR_') or device_id.startswith('INJECTOR'):
+            elif device_id.startswith('IV_INJECTOR_') or device_id.startswith('INJECTOR') or (device_id.startswith('IV') and not device_id.startswith('IV_')):
                 device_type = 'iv_injector'
             elif device_id.startswith('IV_BLOOD_BAG_') or device_id.startswith('BLOOD_BAG'):
                 device_type = 'iv_blood_bag_station'
@@ -226,6 +226,10 @@ class TricorderServer:
                 'wifi_connected': data.get('wifiConnected'),
                 'free_heap': data.get('freeHeap'),
                 'uptime': data.get('uptime'),
+                # Standardized sACN fields (normalize field names)
+                'sacn_universe': data.get('sacnUniverse', data.get('sacn_universe', 1)),
+                'dmx_address': data.get('dmxStartAddress', data.get('dmx_address', data.get('dmxAddress', 1))),
+                'sacn_enabled': data.get('sacnEnabled', data.get('sacn_enabled', True)),
                 **data  # Include any additional fields
             }
             
@@ -551,7 +555,13 @@ def basic_interface():
 @app.route('/api/devices')
 def get_devices():
     """Get all connected devices"""
-    return jsonify(list(devices.values()))
+    return jsonify({
+        'devices': devices,  # Return as dictionary with device_id as keys
+        'device_list': list(devices.values()),  # Also provide as list for compatibility
+        'total_devices': len(devices),
+        'online_devices': len([d for d in devices.values() if d.get('status') == 'online']),
+        'last_updated': datetime.now().isoformat()
+    })
 
 @app.route('/api/devices/cleanup', methods=['POST'])
 def manual_device_cleanup():
@@ -1000,6 +1010,49 @@ def set_device_config(device_id):
         print(f"Config update error: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/config/<device_id>/network', methods=['POST'])
+def set_device_network_config(device_id):
+    """Update device network configuration"""
+    try:
+        if device_id not in devices:
+            return jsonify({'error': f'Device {device_id} not found'}), 404
+        
+        device = devices[device_id]
+        ip_address = device['ip_address']
+        
+        # Get network configuration data from request
+        network_data = request.get_json()
+        if not network_data:
+            return jsonify({'error': 'No network configuration data provided'}), 400
+        
+        print(f"🌐 Updating network config for {device_id} at {ip_address}")
+        print(f"Network data: {network_data}")
+        
+        # Send network configuration to device
+        url = f"http://{ip_address}/network"
+        headers = {'Content-Type': 'application/json'}
+        
+        response = requests.post(url, json=network_data, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            print(f"✅ Network configuration updated for {device_id}")
+            # Note: Device will restart, so it may temporarily go offline
+            return jsonify({
+                'status': 'Network configuration updated - device restarting',
+                'device_id': device_id,
+                'message': 'Device will restart to apply network changes'
+            })
+        else:
+            print(f"❌ Failed to update network config: {response.status_code} - {response.text}")
+            return jsonify({'error': f'Failed to update network configuration: {response.text}'}), 500
+            
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Network config request failed: {e}")
+        return jsonify({'error': f'Failed to reach device: {str(e)}'}), 500
+    except Exception as e:
+        print(f"Network config update error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/config/<device_id>/factory_reset', methods=['POST'])
 def factory_reset_device(device_id):
     """Factory reset device configuration"""
@@ -1209,6 +1262,7 @@ def update_prop_type_firmware(prop_type):
                 command_id = str(uuid.uuid4())
                 ota_command = {
                     'action': 'ota_update',
+                    'device_id': device_id,  # Add device_id so device knows command is for it
                     'commandId': command_id,
                     'parameters': {
                         'firmware_url': firmware_url

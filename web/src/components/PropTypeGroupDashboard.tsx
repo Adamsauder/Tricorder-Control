@@ -25,9 +25,11 @@ import {
   MoreVert as MoreVertIcon,
   Settings as SettingsIcon,
   PlayArrow as PlaybookIcon,
+  TableChart as TableIcon,
 } from '@mui/icons-material';
 import PropTypeCard from './PropTypeCard';
 import PlaybookControl from './PlaybookControl';
+import DeviceTableView from './DeviceTableView';
 
 // API functions for prop-type operations
 const API_BASE = 'http://192.168.1.24:8080';
@@ -308,6 +310,7 @@ const PropTypeGroupDashboard: React.FC = () => {
         >
           <Tab label="Dashboard" icon={<DashboardIcon />} />
           <Tab label="Playbook" icon={<PlaybookIcon />} />
+          <Tab label="Table View" icon={<TableIcon />} />
         </Tabs>
       </AppBar>
 
@@ -395,6 +398,11 @@ const PropTypeGroupDashboard: React.FC = () => {
           <PlaybookControl 
             devices={propTypes.find(pt => pt.type === 'tricorder')?.devices || []} 
           />
+        )}
+
+        {/* Table View Tab Content */}
+        {activeTab === 2 && (
+          <DeviceTableView />
         )}
       </Container>
 

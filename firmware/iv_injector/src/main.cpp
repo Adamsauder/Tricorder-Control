@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
+#include <HTTPClient.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <Adafruit_NeoPixel.h>
@@ -25,9 +26,10 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 #define SACN_PORT 5568     // sACN E1.31 standard port
 #define SACN_MULTICAST_BASE "239.255.0.0"  // sACN multicast base address
 
-// sACN E1.31 Constants
-#define ACN_PACKET_IDENTIFIER "ASC-E1.17\0\0\0"
+// sACN E1.31 Constants - Correct E1.31 packet identifier
+static const uint8_t ACN_PACKET_IDENTIFIER[12] = {0x41, 0x53, 0x43, 0x2d, 0x45, 0x31, 0x2e, 0x31, 0x37, 0x00, 0x00, 0x00}; // "ASC-E1.17"
 #define E131_PACKET_SIZE 638
+#define E131_PREAMBLE_OFFSET 4  // E1.31 packets start with 4-byte preamble
 #define E131_DATA_OFFSET 126
 #define E131_UNIVERSE_OFFSET 113
 
@@ -42,10 +44,10 @@ PropConfig propConfig;
 PropConfig::Config config;
 
 // Device configuration variables - loaded from persistent storage
-String deviceId = "IV_INJECTOR_001";
+String deviceId;  // Will be generated uniquely from MAC address
 String deviceLabel = "IV Injector 001";
 String deviceType = "iv_injector";
-String firmwareVersion = "IV Injector v1.0";
+String firmwareVersion = "IV Injector v1.4";
 int sacnUniverse = 1;
 int sacnStartAddress = 1;
 int ledBrightness = 128;
@@ -59,6 +61,10 @@ String wifiPassword = "academy123";
 WiFiUDP udp;       // Main UDP socket for status broadcasts
 WiFiUDP sacnUdp;   // Separate UDP socket for sACN
 AsyncWebServer server(80);
+
+// Response tracking for command responses
+IPAddress currentSenderIP;
+uint16_t currentSenderPort;
 
 // sACN State Variables
 bool sacnEnabled = true;
@@ -82,9 +88,37 @@ void setLEDColor(uint8_t r, uint8_t g, uint8_t b);
 void setLEDPattern(String pattern);
 void indicateActivity();
 void handleGetConfig(AsyncWebServerRequest *request);
-void handleSetConfig(AsyncWebServerRequest *request);
 void handleFactoryReset(AsyncWebServerRequest *request);
 void handleOTAUpdate(AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final);
+void handleOTAUpdate(String firmwareUrl, String commandId);
+void sendResponse(String commandId, String result);
+
+// Generate unique device ID based on ESP32 MAC address
+String generateUniqueDeviceId() {
+  // Get the ESP32 chip ID (full 48-bit MAC address)
+  uint64_t chipid = ESP.getEfuseMac();
+  
+  // Debug output
+  Serial.printf("Full chip ID: 0x%012llX\n", chipid);
+  
+  // Use multiple parts of the MAC address for better uniqueness
+  uint32_t low32 = (uint32_t)chipid;           // Lower 32 bits
+  uint32_t high16 = (uint32_t)(chipid >> 32);  // Upper 16 bits
+  
+  // Combine different parts and apply additional mixing
+  uint32_t mixed1 = low32 ^ (high16 << 16);    // XOR with shifted high bits
+  uint32_t mixed2 = (low32 >> 8) ^ (high16 << 8); // Different shift pattern
+  uint16_t uniquePart = (uint16_t)(mixed1 ^ mixed2); // Final XOR
+  
+  Serial.printf("Low32: 0x%08X, High16: 0x%04X, Mixed: 0x%04X\n", low32, high16, uniquePart);
+  
+  char uniqueId[16];
+  snprintf(uniqueId, sizeof(uniqueId), "IV%04X", uniquePart);
+  
+  Serial.printf("Generated device ID: %s\n", uniqueId);
+  
+  return String(uniqueId);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -99,6 +133,10 @@ void setup() {
     Serial.println("ERROR: Failed to initialize configuration storage!");
     return;
   }
+  
+  // Generate unique device ID based on MAC address
+  deviceId = generateUniqueDeviceId();
+  Serial.printf("Generated unique device ID: %s\n", deviceId.c_str());
   
   // Load configuration (with WiFi credentials)
   loadConfiguration();
@@ -116,50 +154,7 @@ void setup() {
   strip.clear();
   strip.show();
   
-  // Enhanced boot test pattern - bright blue sequence
-  Serial.println("=== IV INJECTOR BOOT TEST PATTERN ===");
-  
-  // First: Bright blue breathing effect
-  Serial.println("Blue breathing pattern...");
-  for (int cycle = 0; cycle < 3; cycle++) {
-    // Fade up
-    for (int brightness = 0; brightness <= 255; brightness += 15) {
-      strip.setPixelColor(0, strip.Color(0, 0, brightness));
-      strip.show();
-      delay(30);
-    }
-    // Fade down
-    for (int brightness = 255; brightness >= 0; brightness -= 15) {
-      strip.setPixelColor(0, strip.Color(0, 0, brightness));
-      strip.show();
-      delay(30);
-    }
-    delay(100);
-  }
-  
-  // Second: Fast blue flashes
-  Serial.println("Blue flash pattern...");
-  for (int i = 0; i < 8; i++) {
-    strip.setPixelColor(0, strip.Color(0, 0, 255));  // Full blue
-    strip.show();
-    delay(150);
-    strip.clear();
-    strip.show();
-    delay(150);
-  }
-  
-  // Third: Blue pulse to indicate ready
-  Serial.println("Blue ready pulse...");
-  for (int i = 0; i < 2; i++) {
-    strip.setPixelColor(0, strip.Color(0, 0, 255));  // Blue
-    strip.show();
-    delay(500);
-    strip.clear();
-    strip.show();
-    delay(250);
-  }
-  
-  Serial.println("=== BOOT TEST COMPLETE ===");
+  Serial.println("LED initialization complete - proceeding to WiFi setup");
   
   // Initialize WiFi
   if (wifiSSID.length() > 0) {
@@ -208,8 +203,12 @@ void loop() {
 void loadConfiguration() {
   // Load persistent configuration
   if (propConfig.loadConfig(config)) {
-    deviceId = config.deviceLabel;
-    deviceLabel = config.deviceLabel;
+    // Only use stored device ID if it's not the old hardcoded format
+    if (!config.deviceLabel.isEmpty() && !config.deviceLabel.startsWith("IV_INJECTOR_")) {
+      deviceId = config.deviceLabel;
+    }
+    // Use the stored device ID as the label, or the new unique ID if regenerated
+    deviceLabel = deviceId;
     deviceType = config.deviceType;
     sacnUniverse = config.sacnUniverse;
     sacnStartAddress = config.dmxStartAddress;
@@ -219,6 +218,13 @@ void loadConfiguration() {
     fixtureNumber = config.fixtureNumber;
     
     Serial.println("Configuration loaded from storage");
+    
+    // If we regenerated the device ID (old format detected), save the new one
+    if (config.deviceLabel != deviceId) {
+      Serial.println("Device ID was regenerated, saving new configuration...");
+      config.deviceLabel = deviceId;
+      propConfig.saveConfig(config);
+    }
   } else {
     Serial.println("Using default configuration");
     // Save defaults
@@ -243,6 +249,28 @@ void initializeWiFi() {
   Serial.printf("Connecting to WiFi: %s\n", wifiSSID.c_str());
   
   WiFi.mode(WIFI_STA);
+  
+  // Check if using static IP configuration
+  if (!propConfig.getUseDHCP()) {
+    IPAddress staticIP, gateway, subnet, dns;
+    staticIP.fromString(propConfig.getStaticIP());
+    gateway.fromString(propConfig.getStaticGateway());
+    subnet.fromString(propConfig.getStaticSubnet());
+    dns.fromString(propConfig.getStaticDNS());
+    
+    Serial.printf("Using static IP configuration: %s\n", staticIP.toString().c_str());
+    Serial.printf("Gateway: %s, Subnet: %s, DNS: %s\n", 
+                  gateway.toString().c_str(), 
+                  subnet.toString().c_str(), 
+                  dns.toString().c_str());
+    
+    if (!WiFi.config(staticIP, gateway, subnet, dns)) {
+      Serial.println("Warning: Failed to configure static IP, falling back to DHCP");
+    }
+  } else {
+    Serial.println("Using DHCP for IP configuration");
+  }
+  
   WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
   
   int attempts = 0;
@@ -484,8 +512,92 @@ void setupWebServer() {
   });
   
   server.on("/config", HTTP_GET, handleGetConfig);
-  server.on("/config", HTTP_POST, handleSetConfig);
+  server.on("/config", HTTP_POST, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "Configuration updated");
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // Handle JSON body for configuration updates
+    if (index == 0) {
+      JsonDocument doc;
+      if (deserializeJson(doc, (char*)data) == DeserializationError::Ok) {
+        // Convert JSON to string and pass to PropConfig
+        String jsonStr;
+        serializeJson(doc, jsonStr);
+        
+        if (propConfig.fromJSON(jsonStr)) {
+          // Check if network configuration changed
+          bool networkChanged = doc.containsKey("useDHCP") || 
+                               doc.containsKey("staticIP") || 
+                               doc.containsKey("staticGateway") || 
+                               doc.containsKey("staticSubnet") || 
+                               doc.containsKey("staticDNS");
+          
+          if (networkChanged) {
+            Serial.println("Network configuration changed - restarting to apply changes...");
+            delay(1000);
+            ESP.restart();
+          }
+          
+          request->send(200, "text/plain", "Configuration updated successfully");
+          return;
+        }
+      }
+      request->send(400, "text/plain", "Invalid JSON or failed to save configuration");
+    }
+  });
   server.on("/factory-reset", HTTP_POST, handleFactoryReset);
+  
+  // Network configuration endpoint
+  server.on("/network", HTTP_POST, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "Network configuration updated - restarting...");
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // Handle network configuration changes
+    if (index == 0) {
+      JsonDocument doc;
+      if (deserializeJson(doc, (char*)data) == DeserializationError::Ok) {
+        bool updated = false;
+        
+        if (doc.containsKey("useDHCP")) {
+          propConfig.setUseDHCP(doc["useDHCP"]);
+          updated = true;
+        }
+        
+        if (doc.containsKey("staticIP")) {
+          String ipStr = doc["staticIP"].as<String>();
+          propConfig.setStaticIP(ipStr);
+          updated = true;
+        }
+        
+        if (doc.containsKey("staticGateway")) {
+          String gwStr = doc["staticGateway"].as<String>();
+          propConfig.setStaticGateway(gwStr);
+          updated = true;
+        }
+        
+        if (doc.containsKey("staticSubnet")) {
+          String subnetStr = doc["staticSubnet"].as<String>();
+          propConfig.setStaticSubnet(subnetStr);
+          updated = true;
+        }
+        
+        if (doc.containsKey("staticDNS")) {
+          String dnsStr = doc["staticDNS"].as<String>();
+          propConfig.setStaticDNS(dnsStr);
+          updated = true;
+        }
+        
+        if (updated) {
+          Serial.println("Network configuration updated - restarting to apply changes...");
+          request->send(200, "text/plain", "Network configuration updated - restarting...");
+          delay(1000);
+          ESP.restart();
+        } else {
+          request->send(400, "text/plain", "No valid network configuration provided");
+        }
+        return;
+      }
+      request->send(400, "text/plain", "Invalid JSON");
+    }
+  });
   
   // Test endpoint for LED debugging
   server.on("/test", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -524,7 +636,10 @@ void setupWebServer() {
     response->addHeader("Connection", "close");
     request->send(response);
     ESP.restart();
-  }, handleOTAUpdate);
+  }, [](AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final) {
+    // Handle OTA upload using lambda wrapper
+    handleOTAUpdate(request, filename, index, data, len, final);
+  });
   
   server.begin();
   Serial.println("Web server started on port 80");
@@ -533,6 +648,10 @@ void setupWebServer() {
 void handleUDPCommands() {
   int packetSize = udp.parsePacket();
   if (packetSize > 0) {
+    // Store sender info for responses
+    currentSenderIP = udp.remoteIP();
+    currentSenderPort = udp.remotePort();
+    
     char buffer[1024];
     int len = udp.read(buffer, sizeof(buffer) - 1);
     buffer[len] = '\0';
@@ -545,10 +664,25 @@ void handleUDPCommands() {
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, buffer);
     if (error == DeserializationError::Ok) {
+      // Support both "command" (legacy) and "action" (new OTA format)
       String command = doc["command"];
+      String action = doc["action"];
+      String commandId = doc["commandId"];
       String target = doc["device_id"];
       
-      Serial.printf("Parsed command: '%s', target: '%s'\n", command.c_str(), target.c_str());
+      // DEBUG: Show raw extracted values
+      Serial.printf("🔍 Raw extracted values:\n");
+      Serial.printf("   command: '%s' (length: %d)\n", command.c_str(), command.length());
+      Serial.printf("   action: '%s' (length: %d)\n", action.c_str(), action.length());
+      Serial.printf("   target: '%s'\n", target.c_str());
+      
+      // Use action if command is empty or null (new format)
+      if ((command.length() == 0 || command == "null") && action.length() > 0) {
+        Serial.printf("🔄 Using action '%s' as command\n", action.c_str());
+        command = action;
+      }
+      
+      Serial.printf("Parsed command/action: '%s', target: '%s'\n", command.c_str(), target.c_str());
       Serial.printf("Our device ID: '%s'\n", deviceId.c_str());
       
       // Check if command is for this device
@@ -573,6 +707,27 @@ void handleUDPCommands() {
         else if (command == "status") {
           Serial.println("Status request received");
           sendPeriodicStatus();
+        }
+        else if (command == "ota_update") {
+          String firmwareUrl = "";
+          if (doc["parameters"].is<JsonObject>() && doc["parameters"]["firmware_url"].is<String>()) {
+            firmwareUrl = doc["parameters"]["firmware_url"].as<String>();
+          }
+          
+          if (firmwareUrl.length() > 0) {
+            Serial.printf("🔄 Starting OTA update from: %s\n", firmwareUrl.c_str());
+            if (commandId.length() > 0) {
+              sendResponse(commandId, "OTA update started");
+            }
+            
+            // Perform OTA update in background to avoid blocking the response
+            handleOTAUpdate(firmwareUrl, commandId);
+          } else {
+            Serial.println("❌ OTA update failed: No firmware URL provided");
+            if (commandId.length() > 0) {
+              sendResponse(commandId, "OTA update failed: No firmware URL provided");
+            }
+          }
         }
         else {
           Serial.printf("⚠️  Unknown command: %s\n", command.c_str());
@@ -611,24 +766,54 @@ void handleSACNData() {
   if (!sacnEnabled) return;
   
   int packetSize = sacnUdp.parsePacket();
-  if (packetSize >= E131_PACKET_SIZE) {
-    uint8_t buffer[E131_PACKET_SIZE];
-    int len = sacnUdp.read(buffer, E131_PACKET_SIZE);
+  if (packetSize > 0) {
+    Serial.printf("sACN packet received: %d bytes\n", packetSize);
     
-    if (len >= E131_PACKET_SIZE) {
-      processSACNPacket(buffer, len);
+    if (packetSize >= E131_PACKET_SIZE) {
+      uint8_t buffer[E131_PACKET_SIZE];
+      int len = sacnUdp.read(buffer, E131_PACKET_SIZE);
+      
+      if (len >= E131_PACKET_SIZE) {
+        processSACNPacket(buffer, len);
+      }
+    } else {
+      // Read and discard smaller packets
+      uint8_t tempBuffer[packetSize];
+      sacnUdp.read(tempBuffer, packetSize);
+      Serial.printf("Discarded small sACN packet: %d bytes\n", packetSize);
     }
   }
 }
 
 void processSACNPacket(uint8_t* buffer, size_t length) {
-  // Verify sACN packet header
-  if (memcmp(buffer, ACN_PACKET_IDENTIFIER, 12) != 0) {
+  Serial.printf("🔍 Processing packet: %d bytes\n", length);
+  
+  // Print first 16 bytes for debugging
+  Serial.print("📦 Header bytes: ");
+  for (int i = 0; i < 16 && i < length; i++) {
+    Serial.printf("%02X ", buffer[i]);
+  }
+  Serial.println();
+  
+  // Print expected identifier starting after preamble
+  Serial.print("🎯 Expected at offset 4: ");
+  for (int i = 0; i < 12; i++) {
+    Serial.printf("%02X ", ACN_PACKET_IDENTIFIER[i]);
+  }
+  Serial.println();
+  
+  // Verify sACN packet header - skip 4-byte preamble
+  if (memcmp(buffer + E131_PREAMBLE_OFFSET, ACN_PACKET_IDENTIFIER, 12) != 0) {
+    Serial.println("❌ Invalid sACN packet header");
     return; // Not a valid sACN packet
   }
   
+  Serial.println("✅ Valid sACN packet header!");
+  
   // Extract universe number
   uint16_t universe = (buffer[E131_UNIVERSE_OFFSET] << 8) | buffer[E131_UNIVERSE_OFFSET + 1];
+  Serial.printf("sACN packet for universe %d (we want %d)\n", universe, sacnUniverse);
+  
   if (universe != sacnUniverse) {
     return; // Not our universe
   }
@@ -638,9 +823,12 @@ void processSACNPacket(uint8_t* buffer, size_t length) {
   
   // Simple sequence checking (ignoring wrap-around for now)
   if (sequence != 0 && sacnSequence != 0 && sequence <= sacnSequence) {
+    Serial.printf("Old/duplicate packet: seq %d <= %d\n", sequence, sacnSequence);
     return; // Old or duplicate packet
   }
   sacnSequence = sequence;
+  
+  Serial.printf("Processing sACN universe %d, sequence %d\n", universe, sequence);
   
   // Copy DMX data
   memcpy(lastSacnData, &buffer[E131_DATA_OFFSET], 512);
@@ -666,7 +854,19 @@ void setLEDFromSACN() {
   uint8_t g = lastSacnData[sacnStartAddress];
   uint8_t b = lastSacnData[sacnStartAddress + 1];
   
-  setLEDColor(r, g, b);
+  Serial.printf("=== setLEDFromSACN: RGB(%d, %d, %d) ===\n", r, g, b);
+  
+  // Direct LED update from sACN - bypass priority check
+  currentR = r;
+  currentG = g;
+  currentB = b;
+  
+  Serial.printf("sACN setting LED to RGB(%d, %d, %d)...\n", r, g, b);
+  strip.setPixelColor(0, strip.Color(r, g, b));
+  strip.show();
+  Serial.println("✅ sACN LED update complete!");
+  
+  lastActivity = millis();
   
   // Check for sACN timeout (no data for 2.5 seconds)
   if (millis() - lastSacnPacket > 2500) {
@@ -771,11 +971,6 @@ void handleGetConfig(AsyncWebServerRequest *request) {
   request->send(200, "application/json", json);
 }
 
-void handleSetConfig(AsyncWebServerRequest *request) {
-  // This will be called when the body is received
-  request->send(200, "text/plain", "Configuration updated");
-}
-
 void handleFactoryReset(AsyncWebServerRequest *request) {
   Serial.println("Factory reset requested");
   
@@ -809,4 +1004,79 @@ void handleOTAUpdate(AsyncWebServerRequest *request, const String& filename, siz
       Update.printError(Serial);
     }
   }
+}
+
+void handleOTAUpdate(String firmwareUrl, String commandId) {
+  Serial.printf("🔄 Starting remote OTA update from: %s\n", firmwareUrl.c_str());
+  
+  HTTPClient http;
+  http.begin(firmwareUrl);
+  
+  int httpCode = http.GET();
+  if (httpCode == HTTP_CODE_OK) {
+    int contentLength = http.getSize();
+    bool canBegin = Update.begin(contentLength);
+    
+    if (canBegin) {
+      WiFiClient * client = http.getStreamPtr();
+      size_t written = Update.writeStream(*client);
+      
+      if (written == contentLength) {
+        Serial.println("Written : " + String(written) + " successfully");
+      } else {
+        Serial.println("Written only : " + String(written) + "/" + String(contentLength) + ". Retry?");
+      }
+      
+      if (Update.end()) {
+        Serial.println("OTA done!");
+        if (Update.isFinished()) {
+          Serial.println("Update successfully completed. Rebooting.");
+          if (commandId.length() > 0) {
+            sendResponse(commandId, "OTA update completed successfully - rebooting");
+          }
+          delay(1000);
+          ESP.restart();
+        } else {
+          Serial.println("Update not finished? Something went wrong!");
+          if (commandId.length() > 0) {
+            sendResponse(commandId, "OTA update failed - update not finished");
+          }
+        }
+      } else {
+        Serial.println("Error Occurred. Error #: " + String(Update.getError()));
+        if (commandId.length() > 0) {
+          sendResponse(commandId, "OTA update failed - Error #: " + String(Update.getError()));
+        }
+      }
+    } else {
+      Serial.println("Not enough space to begin OTA");
+      if (commandId.length() > 0) {
+        sendResponse(commandId, "OTA update failed - not enough space");
+      }
+    }
+  } else {
+    Serial.printf("HTTP GET failed, error: %s\n", http.errorToString(httpCode).c_str());
+    if (commandId.length() > 0) {
+      sendResponse(commandId, "OTA update failed - HTTP GET failed: " + String(httpCode));
+    }
+  }
+  
+  http.end();
+}
+
+void sendResponse(String commandId, String result) {
+  JsonDocument doc;
+  doc["commandId"] = commandId;
+  doc["result"] = result;
+  doc["timestamp"] = millis();
+  doc["deviceId"] = deviceId;
+  
+  String response;
+  serializeJson(doc, response);
+  
+  udp.beginPacket(currentSenderIP, currentSenderPort);
+  udp.write((const uint8_t*)response.c_str(), response.length());
+  udp.endPacket();
+  
+  Serial.printf("Sent response to %s:%d - %s\n", currentSenderIP.toString().c_str(), currentSenderPort, response.c_str());
 }

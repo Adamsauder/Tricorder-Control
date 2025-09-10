@@ -2,25 +2,43 @@
 
 # Prop Control System - Copilot Instructions
 
-Film set prop control system with ESP32 devices, real-time web dashboard, and hybrid UDP/SACN lighting protocol.
+Film set prop control system with ESP32 devices, real-time web dashboard, and hybrid UDP/SACN lighting protocol. **PRODUCTION FOCUS**: Preparing for upcoming shoot with specific prop requirements.
 
 **IMPORTANT**: This system runs on Windows with PowerShell as the default shell. When generating terminal commands, always use PowerShell syntax (semicolons `;` for command chaining, not `&&`). Never use bash/Linux syntax.
+
+## Production Requirements - Current Shoot Focus
+
+**Priority Props for Upcoming Shoot**:
+- **IV Injectors**: ESP32-C3 + 1 NeoPixel (✅ Complete with OTA system)
+- **Tricorders**: ESP32 + TFT display + NeoPixels + SD video playback (✅ Complete)
+- **Polyinoculators**: ESP32-C3 + 3 NeoPixel strips (15 LEDs total) (✅ Complete)
+- **IV Stations**: New - Modified Tricorder firmware with adjusted LED count
+- **Ostoregenerators**: New - Modified IV Injector firmware
+- **Hand Scanners**: New - Modified IV Injector firmware
+
+**Critical Requirements**:
+- ✅ **OTA Firmware System**: All devices must support remote OTA updates like IV Injectors
+- ✅ **Network Configuration**: DHCP toggle and static IP setting via server AND device web interface
+- ✅ **SACN Control**: Universe and address setting via server AND device web interface  
+- ✅ **Bulk Operations**: Table view with device selection and multi-device actions
+- ✅ **Individual Device Config**: Each prop accessible via its IP for local configuration
 
 ## Architecture Overview
 
 **Three-tier system**: React/TypeScript web dashboard → Flask/SocketIO Python server → ESP32 firmware via UDP (port 8888) + SACN E1.31 (port 5568). Uses SQLite for device persistence, WebSocket for real-time updates, and mDNS for auto-discovery.
 
-**Prop-Type Grouping**: Server groups devices by type (Tricorders, Polyinoculators, etc.) for unified control. Each prop type gets a single card in the web interface for bulk operations like SACN address changes and firmware updates.
+**Prop-Type Grouping**: Server groups devices by type with table view for bulk operations like SACN address changes, firmware updates, and network configuration.
 
-**Device Types**: 
-- **Tricorders**: ESP32 + TFT display + NeoPixels + SD video playback
-- **Polyinoculators**: ESP32-C3 + 3 NeoPixel strips (15 LEDs total)
-- **Defragmentors**: ESP32-C3 + 2 NeoPixels + servo actuator
-- **IV Injectors**: ESP32-C3 + 1 NeoPixel
-- **IV Blood Bag Stations**: ESP32-C3 + 1 NeoPixel *(firmware needed)*
-- **Polyinoculator Cradles**: ESP32-C3 + 1 NeoPixel *(firmware needed)*
+**Production Device Types**: 
+**Production Device Types**:
+- **IV Injectors**: ESP32-C3 + 1 NeoPixel (✅ OTA system complete)
+- **Tricorders**: ESP32 + TFT display + NeoPixels + SD video playback (✅ Complete with folder controls)
+- **Polyinoculators**: ESP32-C3 + 3 NeoPixel strips (15 LEDs total) (✅ Complete)
+- **IV Stations**: ESP32 + TFT display + modified LED configuration (🔄 In development)
+- **Ostoregenerators**: ESP32-C3 + 1 NeoPixel + specialized firmware (🔄 In development)  
+- **Hand Scanners**: ESP32-C3 + 1 NeoPixel + scanner-specific features (🔄 In development)
 
-All devices support OTA updates and SACN/UDP hybrid control.
+All devices support OTA updates, network configuration, and SACN/UDP hybrid control.
 
 ## Development Workflow
 

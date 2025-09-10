@@ -10,6 +10,7 @@ This directory contains files that are no longer actively used in the Prop Contr
 - **`development_docs/`** - Historical documentation and progress tracking files
 - **`old_servers/`** - Recently archived server files (August 2025)
 - **`test_files/`** - Recently archived test and utility scripts (August 2025)
+- **`tricorder_v3/`** - Experimental Tricorder v3 firmware project (archived September 2025)
 
 ## Why These Files Were Archived
 

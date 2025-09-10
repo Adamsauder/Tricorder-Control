@@ -495,59 +495,142 @@ const TricorderFarmDashboard: React.FC = () => {
 
                 {/* Action Buttons */}
                 <CardActions sx={{ px: 2, pb: 2 }}>
-                  <Button
-                    size="small"
-                    variant="contained"
-                    color="success"
-                    startIcon={<PlayIcon />}
-                    sx={{ flex: 1, mr: 1 }}
-                    disabled={device.status !== 'online' || isExecutingCommand}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      executeCommand(device.device_id, 'play');
-                    }}
-                  >
-                    Play
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="contained"
-                    color="warning"
-                    startIcon={<StopIcon />}
-                    sx={{ flex: 1, mr: 1 }}
-                    disabled={device.status !== 'online' || isExecutingCommand}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      executeCommand(device.device_id, 'stop');
-                    }}
-                  >
-                    Stop
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="contained"
-                    color="info"
-                    startIcon={<UpdateIcon />}
-                    sx={{ flex: 1, mr: 1 }}
-                    disabled={device.status !== 'online'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setUpdateDevice(device);
-                      setFirmwareUpdateOpen(true);
-                    }}
-                  >
-                    Update
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="contained"
-                    color="primary"
-                    startIcon={<SettingsIcon />}
-                    sx={{ flex: 1 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openDeviceSettings(device);
-                    }}
+                  {/* Main Control Buttons */}
+                  <Box display="flex" gap={1} mb={1} width="100%">
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="success"
+                      startIcon={<PlayIcon />}
+                      sx={{ flex: 1 }}
+                      disabled={device.status !== 'online' || isExecutingCommand}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        executeCommand(device.device_id, 'play');
+                      }}
+                    >
+                      Play
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="warning"
+                      startIcon={<StopIcon />}
+                      sx={{ flex: 1 }}
+                      disabled={device.status !== 'online' || isExecutingCommand}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        executeCommand(device.device_id, 'stop');
+                      }}
+                    >
+                      Stop
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="info"
+                      startIcon={<UpdateIcon />}
+                      sx={{ flex: 1 }}
+                      disabled={device.status !== 'online'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setUpdateDevice(device);
+                        setFirmwareUpdateOpen(true);
+                      }}
+                    >
+                      Update
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="primary"
+                      startIcon={<SettingsIcon />}
+                      sx={{ flex: 1 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openDeviceSettings(device);
+                      }}
+                    >
+                      Settings
+                    </Button>
+                  </Box>
+
+                  {/* Folder Buttons - First Row (1-5) */}
+                  <Box display="flex" gap={0.5} mb={0.5} width="100%">
+                    {[1, 2, 3, 4, 5].map((folderNum) => (
+                      <Button
+                        key={folderNum}
+                        size="small"
+                        variant="outlined"
+                        color="secondary"
+                        sx={{ 
+                          flex: 1, 
+                          minWidth: '40px',
+                          fontSize: '0.75rem',
+                          py: 0.5
+                        }}
+                        disabled={device.status !== 'online' || isExecutingCommand}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          playVideo([device.device_id], folderNum.toString(), false);
+                          showSnackbar(`Playing folder ${folderNum} on ${device.device_id}`);
+                        }}
+                      >
+                        {folderNum}
+                      </Button>
+                    ))}
+                  </Box>
+
+                  {/* Folder Buttons - Second Row (6-10) */}
+                  <Box display="flex" gap={0.5} mb={0.5} width="100%">
+                    {[6, 7, 8, 9, 10].map((folderNum) => (
+                      <Button
+                        key={folderNum}
+                        size="small"
+                        variant="outlined"
+                        color="secondary"
+                        sx={{ 
+                          flex: 1, 
+                          minWidth: '40px',
+                          fontSize: '0.75rem',
+                          py: 0.5
+                        }}
+                        disabled={device.status !== 'online' || isExecutingCommand}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          playVideo([device.device_id], folderNum.toString(), false);
+                          showSnackbar(`Playing folder ${folderNum} on ${device.device_id}`);
+                        }}
+                      >
+                        {folderNum}
+                      </Button>
+                    ))}
+                  </Box>
+
+                  {/* Greenscreen Button */}
+                  <Box display="flex" width="100%">
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="success"
+                      sx={{ 
+                        flex: 1,
+                        fontSize: '0.8rem',
+                        backgroundColor: '#4caf50',
+                        '&:hover': {
+                          backgroundColor: '#45a049'
+                        }
+                      }}
+                      disabled={device.status !== 'online' || isExecutingCommand}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        playVideo([device.device_id], 'gs', false);
+                        showSnackbar(`Playing greenscreen on ${device.device_id}`);
+                      }}
+                    >
+                      🎬 Greenscreen
+                    </Button>
+                  </Box>
                   >
                     Settings
                   </Button>

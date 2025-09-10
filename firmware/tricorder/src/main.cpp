@@ -75,8 +75,11 @@
 #define RESET_BLINK_COUNT 6   // Number of LED blinks to indicate reset mode
 
 // Video playback settings
-#define FRAME_DELAY_MS 33  // ~30 FPS (1000ms / 30)
+#define FRAME_DELAY_MS 200  // ~5 FPS (200ms per frame) - More realistic for SD card + JPEG decode
 #define VIDEO_BUFFER_SIZE 65536  // 64KB buffer - reduced from 128KB due to ESP32 memory constraints
+#define MAX_FRAME_DECODE_TIME 500  // Maximum time to spend decoding a frame (ms)
+#define FRAME_SKIP_THRESHOLD 1000  // Skip frame if decode takes longer than this (ms)
+#define LOW_MEMORY_THRESHOLD 32768 // Skip frame if free heap below this (bytes)
 
 // Network settings
 #define UDP_PORT 8888      // Port for UDP status broadcasts (matches server)
@@ -183,6 +186,11 @@ struct VideoCommand {
 File videoFile;
 uint8_t* videoBuffer;
 size_t videoBufferSize = 0;  // Actual allocated buffer size
+
+// Video timing and performance
+unsigned long lastVideoFrameTime = 0;
+int frameSkipCount = 0; // For automatic frame skipping
+unsigned long consecutiveSlowFrames = 0; // Track performance issues
 
 // State variables
 bool wifiConnected = false;
@@ -1238,10 +1246,12 @@ void videoTask(void *pvParameters) {
     // Update video playback if playing
     if (videoPlaying) {
       updateVideoPlayback();
+      // Shorter delay during video playback for better frame timing
+      delay(5);
+    } else {
+      // Longer delay when not playing video to save CPU
+      delay(20);
     }
-    
-    // Small delay to prevent overwhelming the video system
-    delay(10);
   }
 }
 
@@ -1948,44 +1958,91 @@ bool playVideo(String filename, bool loop) {
     if (testDir && testDir.isDirectory()) {
       testDir.close();
       
-      Serial.printf("Streaming folder-based animation from: %s\n", folderPath.c_str());
+      Serial.printf("Analyzing folder contents: %s\n", folderPath.c_str());
       
-      // Count frames by testing for sequential frame files
-      // This avoids loading all filenames into memory
+      // First, try to detect frame sequence animation (frame_XXX.jpg pattern)
+      // Use directory listing instead of sequential file existence checks for better performance
       int frameCount = 0;
-      for (int i = 1; i <= 1000; i++) {  // Test up to 1000 frames
-        String framePath = folderPath + "/frame_" + String(i).c_str();
-        
-        // Pad frame number to 3 digits
-        if (i < 10) framePath = folderPath + "/frame_00" + String(i) + ".jpg";
-        else if (i < 100) framePath = folderPath + "/frame_0" + String(i) + ".jpg";
-        else framePath = folderPath + "/frame_" + String(i) + ".jpg";
-        
-        if (SD.exists(framePath)) {
-          frameCount = i;  // Update to highest found frame
-          if (i <= 10) {  // Only log first 10 for debugging
-            Serial.printf("Found frame %d: %s\n", i, framePath.c_str());
+      File dir = SD.open(folderPath);
+      if (dir) {
+        File file = dir.openNextFile();
+        while (file) {
+          if (!file.isDirectory()) {
+            String fileName = file.name();
+            // Check for frame_XXX.jpg pattern (support various padding formats)
+            if (fileName.startsWith("frame_") && (fileName.endsWith(".jpg") || fileName.endsWith(".JPG"))) {
+              // Extract frame number - handle zero-padded numbers
+              String frameNumStr = fileName.substring(6); // Remove "frame_" prefix
+              frameNumStr.replace(".jpg", "");
+              frameNumStr.replace(".JPG", "");
+              
+              // Convert to int - this automatically handles zero padding
+              int frameNum = frameNumStr.toInt();
+              if (frameNum > 0 && frameNum > frameCount) {  // Ensure valid frame number
+                frameCount = frameNum;
+              }
+              if (frameCount <= 10) {  // Only log first 10 for debugging
+                Serial.printf("Found frame %d: %s (extracted from: %s)\n", frameNum, fileName.c_str(), frameNumStr.c_str());
+              }
+            }
           }
-        } else {
-          // If we haven't found any frames yet, try different patterns
-          if (frameCount == 0) {
-            // Try alternative naming patterns
-            continue;
-          } else {
-            // Found some frames, this appears to be the end
-            break;
-          }
+          file = dir.openNextFile();
         }
+        dir.close();
       }
       
       if (frameCount > 0) {
-        // Successfully found frames using streaming approach
+        // Successfully found frames using directory listing approach
         currentVideoFolder = folderPath;
         maxFramesInFolder = frameCount;
         totalFrames = frameCount;
         isAnimatedSequence = true;
         
-        Serial.printf("Streaming animation: %d frames in folder %s\n", totalFrames, filename.c_str());
+        Serial.printf("SUCCESS: Streaming animation setup: %d frames in folder %s\n", totalFrames, filename.c_str());
+        Serial.printf("Frame detection: Found %d frames using directory listing\n", frameCount);
+      } else {
+        // No frame sequence found, check for any JPEG files (static image mode)
+        Serial.printf("No frame sequence found, checking for static images...\n");
+        
+        // Reopen directory to look for any JPEG files
+        File dir = SD.open(folderPath);
+        if (dir) {
+          File file = dir.openNextFile();
+          String firstImageFile = "";
+          
+          while (file) {
+            if (!file.isDirectory()) {
+              String fileName = file.name();
+              if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg") || 
+                  fileName.endsWith(".JPG") || fileName.endsWith(".JPEG")) {
+                firstImageFile = fileName;
+                Serial.printf("Found static image: %s\n", fileName.c_str());
+                break; // Use first image found
+              }
+            }
+            file = dir.openNextFile();
+          }
+          dir.close();
+          
+          if (firstImageFile != "") {
+            // Set up for single static image display
+            currentVideoFolder = folderPath + "/" + firstImageFile;  // Store full path to specific image
+            totalFrames = 1;
+            maxFramesInFolder = 1;
+            isAnimatedSequence = false;
+            
+            Serial.printf("Static image mode: displaying %s from folder %s\n", firstImageFile.c_str(), filename.c_str());
+          } else {
+            Serial.printf("No image files found in folder: %s\n", folderPath.c_str());
+            return false;
+          }
+        } else {
+          Serial.printf("Failed to open folder for reading: %s\n", folderPath.c_str());
+          return false;
+        }
+      }
+      
+      if (totalFrames > 0) {
         
         // Set video state for animation
         videoPlaying = true;
@@ -1993,6 +2050,11 @@ bool playVideo(String filename, bool loop) {
         currentVideo = filename;
         currentFrame = 0;
         lastFrameTime = millis();
+        
+        // Initialize performance tracking variables properly
+        lastVideoFrameTime = millis();  // Initialize to current time, not 0
+        frameSkipCount = 0;
+        consecutiveSlowFrames = 0;
         
         return true;
       } else {
@@ -2080,6 +2142,11 @@ bool playVideo(String filename, bool loop) {
   currentFrame = 0;
   lastFrameTime = millis();
   
+  // Initialize performance tracking variables properly
+  lastVideoFrameTime = millis();  // Initialize to current time, not 0
+  frameSkipCount = 0;
+  consecutiveSlowFrames = 0;
+  
   return true;
 }
 
@@ -2138,8 +2205,16 @@ void updateVideoPlayback() {
   // For animated sequences, check if it's time for the next frame
   if (currentTime - lastFrameTime >= FRAME_DELAY_MS) {
     Serial.printf("Frame timer triggered - currentFrame: %d, totalFrames: %d\n", currentFrame, totalFrames);
+    
+    // Show the frame (simplified - no complex frame skipping for now)
+    unsigned long frameStart = millis();
     showVideoFrame();
+    unsigned long frameTime = millis() - frameStart;
+    
+    Serial.printf("Frame %d decode time: %lums\n", currentFrame + 1, frameTime);
+    
     lastFrameTime = currentTime;
+    lastVideoFrameTime = millis();
     currentFrame++;
     Serial.printf("Advanced to frame %d\n", currentFrame);
     
@@ -2161,6 +2236,21 @@ void updateVideoPlayback() {
 
 void showVideoFrame() {
   if (!videoPlaying || totalFrames == 0) {
+    return;
+  }
+  
+  // Check available memory before processing large frames
+  size_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap < 32768) { // Less than 32KB free
+    Serial.printf("WARNING: Low memory %d bytes - skipping frame %d\n", freeHeap, currentFrame);
+    currentFrame++;
+    if (currentFrame >= totalFrames) {
+      if (videoLooping) {
+        currentFrame = 0;
+      } else {
+        stopVideo();
+      }
+    }
     return;
   }
   
@@ -2214,15 +2304,48 @@ void showVideoFrame() {
   // Read the entire JPEG file into buffer
   size_t fileSize = frameFile.size();
   if (fileSize > videoBufferSize) {
-    Serial.printf("Frame file too large: %d bytes (max %d)\n", fileSize, videoBufferSize);
+    Serial.printf("Frame file too large: %d bytes (max %d) - SKIPPING\n", fileSize, videoBufferSize);
     frameFile.close();
+    // Skip to next frame instead of hanging
+    currentFrame++;
+    if (currentFrame >= totalFrames) {
+      if (videoLooping) {
+        currentFrame = 0;
+      } else {
+        stopVideo();
+      }
+    }
     return;
   }
   
-  size_t bytesRead = frameFile.read(videoBuffer, fileSize);
+  // Add watchdog yield during file read for large files
+  size_t bytesRead = 0;
+  size_t remainingBytes = fileSize;
+  size_t chunkSize = min((size_t)8192, remainingBytes); // 8KB chunks
+  
+  while (remainingBytes > 0 && bytesRead < videoBufferSize) {
+    size_t currentChunk = min(chunkSize, remainingBytes);
+    size_t thisRead = frameFile.read(videoBuffer + bytesRead, currentChunk);
+    bytesRead += thisRead;
+    remainingBytes -= thisRead;
+    
+    // Yield to watchdog for large files
+    if (bytesRead % 16384 == 0) { // Every 16KB
+      yield();
+      delayMicroseconds(100); // Brief pause
+    }
+    
+    if (thisRead != currentChunk) break; // Read error
+  }
   frameFile.close();
   
   if (bytesRead > 0) {
+    // Yield before starting JPEG decode for large images
+    if (bytesRead > 32768) { // For files larger than 32KB
+      yield();
+      delayMicroseconds(200);
+    }
+    
     // Try to decode as JPEG with optimized settings
     if (jpeg.openRAM(videoBuffer, bytesRead, JPEGDraw)) {
       // Configure JPEG decoder for best quality
@@ -2242,14 +2365,37 @@ void showVideoFrame() {
         tft.fillScreen(TFT_BLACK);
       }
       
-      // Decode and display
-      if (jpeg.decode(xOffset, yOffset, 0)) {
-        Serial.printf("SUCCESS: Displayed frame %d/%d: %s (%dx%d)\n", currentFrame + 1, totalFrames, currentFramePath.c_str(), width, height);
+      // Yield before decode for responsiveness
+      yield();
+      
+      // Decode and display with timeout protection
+      unsigned long decodeStart = millis();
+      bool decodeSuccess = jpeg.decode(xOffset, yOffset, 0);
+      unsigned long decodeTime = millis() - decodeStart;
+      
+      if (decodeSuccess) {
+        Serial.printf("SUCCESS: Displayed frame %d/%d: %s (%dx%d) [%lums]\n", 
+                     currentFrame + 1, totalFrames, currentFramePath.c_str(), width, height, decodeTime);
+        
+        // Adaptive frame skipping for performance
+        if (decodeTime > FRAME_SKIP_THRESHOLD) {
+          Serial.printf("WARNING: Very slow decode %lums - consider frame skipping\n", decodeTime);
+        } else if (decodeTime > MAX_FRAME_DECODE_TIME) {
+          Serial.printf("WARNING: Slow decode time %lums for frame %d\n", decodeTime, currentFrame);
+        }
       } else {
         Serial.printf("ERROR: JPEG decode failed for frame %d: %s\n", currentFrame, currentFramePath.c_str());
+        // Skip failed frames to prevent getting stuck
+        currentFrame++;
+        if (currentFrame >= totalFrames && videoLooping) {
+          currentFrame = 0;
+        }
       }
       
       jpeg.close();
+      
+      // Yield after decode to prevent watchdog timeout
+      yield();
     } else {
       Serial.printf("ERROR: JPEG open failed for frame %d: %s\n", currentFrame, currentFramePath.c_str());
     }

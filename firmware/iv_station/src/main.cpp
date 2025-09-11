@@ -1,6 +1,6 @@
 /*
- * Enhanced Tricorder Firmware - With Persistent Configuration and Web Interface
- * ESP32-based tricorder with video playback, LED control, and web configuration
+ * Enhanced IV Station Firmware - Based on Tricorder codebase with IV Station Configuration
+ * ESP32-based IV station with video playback, LED control, and web configuration
  */
 
 #include <WiFi.h>
@@ -13,6 +13,7 @@
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <FastLED.h>
+#include <Adafruit_NeoPixel.h>
 #include <TFT_eSPI.h>
 #include <SD.h>
 #include <SPI.h>
@@ -24,30 +25,24 @@
 #include <vector>
 #include "TricorderConfig.h"
 
-// Pin definitions for ESP32-2432S032C-I
+// Pin definitions for ESP32-2432S032C-I (IV Station configuration)
 #define LED_PIN 21         // NeoPixel data pin (external connection) - IO21
-#define NUM_LEDS 4         // Total LEDs: 1 onboard + 3 front NeoPixels  
-#define NUM_NEOPIXELS 3    // Number of NeoPixels in external strip (front LEDs)
+#define NUM_LEDS 1         // IV Station: Single RGBW LED
+#define NUM_NEOPIXELS 1    // Number of NeoPixels (single RGBW LED)
 #define TFT_BL 27          // TFT backlight pin
 #define LED_POWER_EN 22    // LED strip power enable pin (DC-DC converter)
 
 // LED Type Configuration - Change this to match your hardware
-// Uncomment ONE of the following lines:
-#define LED_TYPE_RGB       // 3-channel RGB LEDs (WS2812B, WS2811, etc.)
-// #define LED_TYPE_RGBW   // 4-channel RGBW LEDs (SK6812, WS2814, etc.)
+// Single RGBW LED configuration - using Adafruit NeoPixel for proper RGBW support
+#define CHANNELS_PER_LED 4  // RGBW = 4 channels for SACN
+#define NUM_LEDS 1          // Single external LED
+#define NUM_NEOPIXELS 1     // Single RGBW LED on IO21
 
-// LED Strip Configuration
-#ifdef LED_TYPE_RGB
-  #define CHANNELS_PER_LED 3  // RGB = 3 channels
-  #define LED_CHIPSET WS2812B
-  #define LED_COLOR_ORDER GRB
-#elif defined(LED_TYPE_RGBW)
-  #define CHANNELS_PER_LED 4  // RGBW = 4 channels  
-  #define LED_CHIPSET SK6812
-  #define LED_COLOR_ORDER GRBW
-#else
-  #error "Must define either LED_TYPE_RGB or LED_TYPE_RGBW"
-#endif
+// Initialize Adafruit NeoPixel strip for RGBW LED
+Adafruit_NeoPixel externalLED(NUM_NEOPIXELS, LED_PIN, NEO_GRBW + NEO_KHZ800);
+
+// Keep FastLED for other functionality (if any)
+CRGB leds[NUM_NEOPIXELS];  // Single RGBW LED on IO21 (used for compatibility)
 
 // SD Card pins (typical SPI configuration for ESP32-2432S032C)
 #define SD_CS 5            // SD card chip select
@@ -97,38 +92,22 @@ TricorderConfig tricorderConfig;
 
 // Global configuration variables (loaded from tricorderConfig)
 String deviceId;
-String firmwareVersion = "Enhanced Tricorder v2.4 sACN-Status";
+String firmwareVersion = "IV Station v1.0 OTA";
 
-// Forward declaration of LED array (defined later)
-extern CRGB leds[NUM_NEOPIXELS];
-
-// Helper functions for LED color handling
+// Helper functions for LED color handling - using Adafruit NeoPixel for RGBW support
 void setLEDColor(int index, int r, int g, int b, int w = 0) {
   if (index < 0 || index >= NUM_NEOPIXELS) return;
   
-  #ifdef LED_TYPE_RGB
-    // RGB mode: ignore white channel
-    leds[index] = CRGB(r, g, b);
-  #elif defined(LED_TYPE_RGBW)
-    // RGBW mode: FastLED handles RGBW with special syntax
-    leds[index] = CRGB(r, g, b);
-    // Note: For true RGBW support, you may need to use FastLED's raw buffer access
-    // This is a simplified version that works with most RGBW strips
-  #endif
+  // Use Adafruit NeoPixel for true RGBW support
+  externalLED.setPixelColor(index, externalLED.Color(r, g, b, w));
 }
 
 void setAllLEDs(int r, int g, int b, int w = 0) {
-  #ifdef LED_TYPE_RGB
-    fill_solid(leds, NUM_NEOPIXELS, CRGB(r, g, b));
-  #elif defined(LED_TYPE_RGBW)
-    for (int i = 0; i < NUM_NEOPIXELS; i++) {
-      setLEDColor(i, r, g, b, w);
-    }
-  #endif
+  // For single LED, same as setLEDColor(0, ...)
+  externalLED.setPixelColor(0, externalLED.Color(r, g, b, w));
 }
 
 // Hardware objects
-CRGB leds[NUM_NEOPIXELS];  // Only for NeoPixel strip (front 3 LEDs)
 TFT_eSPI tft = TFT_eSPI();
 WiFiUDP udp;
 WiFiUDP sacnUdp;  // Separate UDP socket for sACN
@@ -229,6 +208,11 @@ unsigned long lastSacnPacket = 0;
 uint8_t lastSacnData[512] = {0};  // Store last received DMX data
 bool sacnActive = false;  // True when receiving sACN data
 uint8_t sacnSequence = 0;  // Track sACN sequence numbers
+
+// LED refresh variables - periodic refresh every 500ms for connection reliability
+unsigned long lastLedRefresh = 0;
+const unsigned long LED_REFRESH_INTERVAL = 500; // Refresh LED every 500ms
+uint8_t lastLedR = 0, lastLedG = 0, lastLedB = 0, lastLedW = 0; // Track current LED state
 bool sacnPriority = false;  // True when sACN should override UDP LED commands
 
 // Software dimming function for RGB565 pixels
@@ -309,6 +293,7 @@ bool processSACNPacket(uint8_t* packet, size_t length);
 void updateLEDsFromDMX(uint8_t* dmxData);
 void setSACNPriority(bool enabled);
 String getMulticastAddress(int universe);
+void refreshLED(); // Periodic LED refresh for connection reliability
 
 // Dual-core task functions
 void ledTask(void *pvParameters);
@@ -403,9 +388,10 @@ void setup() {
   Serial.println("LED power enabled (pin 22)");
   delay(100); // Allow power to stabilize
   
-  // Initialize LEDs
-  FastLED.addLeds<LED_CHIPSET, LED_PIN, LED_COLOR_ORDER>(leds, NUM_NEOPIXELS);
-  FastLED.setBrightness(ledBrightness);
+  // Initialize external RGBW LED using Adafruit NeoPixel
+  externalLED.begin();
+  externalLED.setBrightness(ledBrightness);
+  externalLED.show(); // Initialize all pixels to 'off'
   
   // Initialize built-in RGB LED pins
   pinMode(RGB_LED_R, OUTPUT);
@@ -595,7 +581,7 @@ void setup() {
     String hostname = tricorderConfig.getHostname();
     if (MDNS.begin(hostname.c_str())) {
       Serial.println("mDNS responder started");
-      MDNS.addService("tricorder", "udp", udpPort);
+      MDNS.addService("iv-station", "udp", udpPort);
       MDNS.addService("http", "tcp", tricorderConfig.getWebPort());
     }
     
@@ -610,8 +596,8 @@ void setup() {
     WiFi.mode(WIFI_AP);
     
     // Create AP with device-specific name and default password
-    String apName = "Tricorder-" + String(deviceId);
-    const char* apPassword = "tricorder123"; // Default password for emergency access
+    String apName = "IV-Station-" + String(deviceId);
+    const char* apPassword = "ivstation123"; // Default password for emergency access
     
     Serial.printf("Starting Access Point: %s\n", apName.c_str());
     Serial.printf("Default password: %s\n", apPassword);
@@ -812,11 +798,11 @@ void updateBootScreenWithStatus() {
     
     tft.setTextColor(TFT_WHITE);
     tft.setCursor(textX, textY + (currentLine * lineHeight));
-    tft.printf("Tricorder-%s", deviceId.c_str());
+    tft.printf("IV-Station-%s", deviceId.c_str());
     currentLine += 1;
     
     tft.setCursor(textX, textY + (currentLine * lineHeight));
-    tft.println("Pass: tricorder123");
+    tft.println("Pass: ivstation123");
     currentLine += 1;
     
   } else {
@@ -853,81 +839,100 @@ void updateBootScreenWithStatus() {
   Serial.println("=== BOOT STATUS DISPLAY COMPLETE ===");
 }
 
-// LED Task - Runs on Core 1 for real-time LED control
+// LED Task - Runs on Core 1 for real-time LED control with periodic refresh
 void ledTask(void *pvParameters) {
   Serial.printf("LED Task starting on Core: %d\n", xPortGetCoreID());
   
-  // Re-initialize FastLED on this core to ensure proper multi-core operation
-  FastLED.addLeds<LED_CHIPSET, LED_PIN, LED_COLOR_ORDER>(leds, NUM_LEDS);
-  FastLED.setBrightness(ledBrightness);
-  Serial.println("FastLED re-initialized on LED task core");
+  // No need to re-initialize Adafruit NeoPixel as it's already initialized
+  Serial.println("LED task initialized - using Adafruit NeoPixel for external RGBW LED with 500ms refresh");
   
   LEDCommand command;
   
   while (true) {
-    // Wait for LED commands from other tasks/cores
-    if (xQueueReceive(ledCommandQueue, &command, portMAX_DELAY) == pdPASS) {
+    // Wait for LED commands with timeout to allow periodic refresh
+    // Use pdMS_TO_TICKS to convert 100ms to FreeRTOS ticks
+    if (xQueueReceive(ledCommandQueue, &command, pdMS_TO_TICKS(100)) == pdPASS) {
       Serial.printf("LED Task received command type: %d\n", command.type);
       switch (command.type) {
         case LEDCommand::SET_COLOR:
           Serial.printf("Setting LED color to R:%d G:%d B:%d W:%d\n", command.r, command.g, command.b, command.w);
           currentColor = CRGB(command.r, command.g, command.b);
-          setAllLEDs(command.r, command.g, command.b, command.w);
-          FastLED.show();
-          Serial.println("LED color updated and displayed");
+          // Store current LED state for refresh
+          lastLedR = command.r;
+          lastLedG = command.g;
+          lastLedB = command.b;
+          lastLedW = command.w;
+          // Use Adafruit NeoPixel for external RGBW LED
+          externalLED.setPixelColor(0, externalLED.Color(command.r, command.g, command.b, command.w));
+          externalLED.show();
+          Serial.println("External RGBW LED color updated and displayed");
           break;
           
         case LEDCommand::SET_BRIGHTNESS:
           ledBrightness = constrain(command.brightness, 0, 255);
-          FastLED.setBrightness(ledBrightness);
-          FastLED.show();
+          externalLED.setBrightness(ledBrightness);
+          externalLED.show();
           break;
           
         case LEDCommand::SET_INDIVIDUAL:
-          if (command.ledIndex >= 0 && command.ledIndex < NUM_LEDS) {
-            setLEDColor(command.ledIndex, command.r, command.g, command.b, command.w);
-            FastLED.show();
+          // For single LED, same as SET_COLOR
+          if (command.ledIndex == 0) {
+            // Store current LED state for refresh
+            lastLedR = command.r;
+            lastLedG = command.g;
+            lastLedB = command.b;
+            lastLedW = command.w;
+            externalLED.setPixelColor(0, externalLED.Color(command.r, command.g, command.b, command.w));
+            externalLED.show();
           }
           break;
           
         case LEDCommand::SCANNER_EFFECT:
           {
-            // Scan left to right
-            for (int i = 0; i < NUM_LEDS; i++) {
-              setAllLEDs(0, 0, 0, 0);  // Clear all LEDs
-              setLEDColor(i, command.r, command.g, command.b, command.w);
-              FastLED.show();
+            // For single LED, create a flashing effect instead of scanning
+            for (int flash = 0; flash < 5; flash++) {
+              externalLED.setPixelColor(0, externalLED.Color(command.r, command.g, command.b, command.w));
+              externalLED.show();
+              delay(command.delayMs);
+              externalLED.setPixelColor(0, externalLED.Color(0, 0, 0, 0));
+              externalLED.show();
               delay(command.delayMs);
             }
-            // Scan right to left
-            for (int i = NUM_LEDS - 2; i >= 1; i--) {
-              setAllLEDs(0, 0, 0, 0);  // Clear all LEDs
-              setLEDColor(i, command.r, command.g, command.b, command.w);
-              FastLED.show();
-              delay(command.delayMs);
-            }
+            // Restore previous LED state after effect
+            refreshLED();
           }
           break;
           
         case LEDCommand::PULSE_EFFECT:
           {
-            CRGB color = CRGB(command.r, command.g, command.b);
             unsigned long startTime = millis();
             
             while (millis() - startTime < command.duration) {
               float progress = (millis() - startTime) / (float)command.duration;
-              float brightness = (sin(progress * 2 * PI) + 1) / 2; // 0 to 1
+              float brightness = (sin(progress * 2 * PI * 4) + 1) / 2; // 4 cycles, 0 to 1
               
-              CRGB dimmedColor = color;
-              dimmedColor.nscale8(255 * brightness);
+              uint8_t r = (uint8_t)(command.r * brightness);
+              uint8_t g = (uint8_t)(command.g * brightness);
+              uint8_t b = (uint8_t)(command.b * brightness);
+              uint8_t w = (uint8_t)(command.w * brightness);
               
-              fill_solid(leds, NUM_LEDS, dimmedColor);
-              FastLED.show();
+              externalLED.setPixelColor(0, externalLED.Color(r, g, b, w));
+              externalLED.show();
               delay(20);
             }
+            // Restore previous LED state after effect
+            refreshLED();
           }
           break;
       }
+    }
+    
+    // Check if it's time for periodic LED refresh
+    unsigned long currentTime = millis();
+    if (currentTime - lastLedRefresh >= LED_REFRESH_INTERVAL) {
+      refreshLED();
+      lastLedRefresh = currentTime;
+      // Serial.printf("LED refreshed: RGBW(%d,%d,%d,%d)\n", lastLedR, lastLedG, lastLedB, lastLedW);
     }
     
     // Small yield to prevent watchdog issues
@@ -1046,62 +1051,32 @@ void updateLEDsFromDMX(uint8_t* dmxData) {
   // Calculate starting index in DMX data (DMX is 1-based, arrays are 0-based)
   int dmxIndex = sacnStartAddress - 1;
   
-  // Update NeoPixel strip (first 3 LEDs)
-  for (int i = 0; i < NUM_NEOPIXELS; i++) {
-    #ifdef LED_TYPE_RGB
-      // RGB: 3 channels per LED
-      int r = dmxData[dmxIndex + (i * 3) + 0];
-      int g = dmxData[dmxIndex + (i * 3) + 1];
-      int b = dmxData[dmxIndex + (i * 3) + 2];
-      leds[i] = CRGB(r, g, b);
-    #elif defined(LED_TYPE_RGBW)
-      // RGBW: 4 channels per LED
-      int r = dmxData[dmxIndex + (i * 4) + 0];
-      int g = dmxData[dmxIndex + (i * 4) + 1];
-      int b = dmxData[dmxIndex + (i * 4) + 2];
-      int w = dmxData[dmxIndex + (i * 4) + 3];
-      
-      // For RGBW, we need to handle the white channel
-      // This is a simplified approach - actual RGBW mixing is more complex
-      leds[i] = CRGB(r + w/3, g + w/3, b + w/3);  // Approximate white mixing
-    #endif
+  // Update single RGBW LED using Adafruit NeoPixel
+  if (dmxIndex + 3 < 512) {  // Bounds check for RGBW (4 channels)
+    uint8_t r = dmxData[dmxIndex + 0];
+    uint8_t g = dmxData[dmxIndex + 1];
+    uint8_t b = dmxData[dmxIndex + 2];
+    uint8_t w = dmxData[dmxIndex + 3];
+    
+    Serial.printf("SACN LED update: RGBW(%d, %d, %d, %d)\n", r, g, b, w);
+    
+    // Apply brightness scaling
+    float brightness = tricorderConfig.getBrightness() / 255.0;
+    r = (uint8_t)(r * brightness);
+    g = (uint8_t)(g * brightness);
+    b = (uint8_t)(b * brightness);
+    w = (uint8_t)(w * brightness);
+    
+    // Store current LED state for periodic refresh
+    lastLedR = r;
+    lastLedG = g;
+    lastLedB = b;
+    lastLedW = w;
+    
+    // Set RGBW LED using Adafruit NeoPixel (supports true RGBW)
+    externalLED.setPixelColor(0, externalLED.Color(r, g, b, w));
+    externalLED.show();
   }
-  
-  // Update onboard LED (4th pixel) - separate PWM control
-  #ifdef LED_TYPE_RGB
-    // Onboard LED uses next 3 channels after the NeoPixel strip
-    int onboardIndex = dmxIndex + (NUM_NEOPIXELS * 3);
-    
-    // Bounds check to prevent reading beyond DMX array
-    if (onboardIndex + 2 < 512) {
-      int onboard_r = dmxData[onboardIndex + 0];
-      int onboard_g = dmxData[onboardIndex + 1];
-      int onboard_b = dmxData[onboardIndex + 2];
-      setBuiltinLED(onboard_r, onboard_g, onboard_b);
-    } else {
-      // If beyond bounds, turn off onboard LED
-      setBuiltinLED(0, 0, 0);
-    }
-  #elif defined(LED_TYPE_RGBW)
-    // Onboard LED uses next 4 channels after the NeoPixel strip
-    int onboardIndex = dmxIndex + (NUM_NEOPIXELS * 4);
-    
-    // Bounds check to prevent reading beyond DMX array
-    if (onboardIndex + 2 < 512) {
-      int onboard_r = dmxData[onboardIndex + 0];
-      int onboard_g = dmxData[onboardIndex + 1];
-      int onboard_b = dmxData[onboardIndex + 2];
-      // Skip white channel for onboard LED (only RGB)
-      setBuiltinLED(onboard_r, onboard_g, onboard_b);
-    } else {
-      // If beyond bounds, turn off onboard LED
-      setBuiltinLED(0, 0, 0);
-    }
-  #endif
-  
-  // Apply brightness from configuration and update NeoPixels
-  FastLED.setBrightness(tricorderConfig.getBrightness());
-  FastLED.show();
 }
 
 // Set sACN priority mode
@@ -1111,9 +1086,18 @@ void setSACNPriority(bool enabled) {
     Serial.println("sACN priority enabled - ignoring UDP LED commands");
   } else {
     Serial.println("sACN priority disabled - accepting UDP LED commands");
-    // When sACN priority is disabled, ensure onboard LED is off to prevent flicker
-    setBuiltinLED(0, 0, 0);
+    // Clear the external RGBW LED when sACN priority is disabled
+    externalLED.setPixelColor(0, externalLED.Color(0, 0, 0, 0));
+    externalLED.show();
+    // Reset LED state tracking
+    lastLedR = lastLedG = lastLedB = lastLedW = 0;
   }
+}
+
+// Refresh LED with last known values - ensures connection reliability
+void refreshLED() {
+  externalLED.setPixelColor(0, externalLED.Color(lastLedR, lastLedG, lastLedB, lastLedW));
+  externalLED.show();
 }
 
 // Calculate multicast address for sACN universe
@@ -1548,13 +1532,11 @@ void processNetworkCommand(NetworkCommand &netCmd) {
     }
     else if (action == "save_current_as_default") {
       // Save current LED colors as default startup colors
-      uint8_t red[NUM_NEOPIXELS], green[NUM_NEOPIXELS], blue[NUM_NEOPIXELS];
-      
-      for (int i = 0; i < NUM_NEOPIXELS; i++) {
-        red[i] = leds[i].r;
-        green[i] = leds[i].g;
-        blue[i] = leds[i].b;
-      }
+      // Get current external LED color (only single LED)
+      uint32_t currentPixel = externalLED.getPixelColor(0);
+      uint8_t red[NUM_NEOPIXELS] = {(uint8_t)((currentPixel >> 16) & 0xFF)};
+      uint8_t green[NUM_NEOPIXELS] = {(uint8_t)((currentPixel >> 8) & 0xFF)};
+      uint8_t blue[NUM_NEOPIXELS] = {(uint8_t)(currentPixel & 0xFF)};
       
       tricorderConfig.setDefaultColors(red, green, blue);
       tricorderConfig.setUseDefaultColors(true);
@@ -1808,9 +1790,8 @@ void discoverServers() {
   // Broadcast discovery to multiple subnets
   IPAddress localIP = WiFi.localIP();
   
-  // Try multiple broadcast addresses for better subnet coverage
+  // Try multiple subnet broadcasts
   IPAddress broadcastIPs[] = {
-    IPAddress(255, 255, 255, 255),                         // Global broadcast (reaches all subnets)
     IPAddress(localIP[0], localIP[1], localIP[2], 255),    // Local subnet broadcast
     IPAddress(192, 168, 1, 255),                           // 192.168.1.x broadcast
     IPAddress(192, 168, 0, 255),                           // 192.168.0.x broadcast
@@ -1818,7 +1799,7 @@ void discoverServers() {
   };
   
   // Send discovery to all broadcast addresses
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 4; i++) {
     udp.beginPacket(broadcastIPs[i], UDP_PORT);
     udp.write((const uint8_t*)discoveryMsg.c_str(), discoveryMsg.length());
     udp.endPacket();
@@ -1869,7 +1850,7 @@ void sendPeriodicStatus() {
   // Send periodic status to server (broadcast to server IP)
   JsonDocument doc;
   doc["deviceId"] = deviceId;
-  doc["type"] = "tricorder";
+  doc["type"] = "iv_station";
   doc["deviceLabel"] = tricorderConfig.getDeviceLabel();
   doc["fixtureNumber"] = tricorderConfig.getFixtureNumber();
   doc["firmwareVersion"] = firmwareVersion;
@@ -1883,12 +1864,6 @@ void sendPeriodicStatus() {
   doc["videoLooping"] = videoLooping;
   doc["currentFrame"] = currentFrame;
   doc["timestamp"] = millis();
-  
-  // Include sACN information in periodic status
-  doc["sacnUniverse"] = sacnUniverse;
-  doc["sacnAddress"] = sacnStartAddress;
-  doc["sacnEnabled"] = sacnEnabled;
-  doc["sacnActive"] = sacnActive;
   
   // Include battery information in periodic status
   doc["batteryVoltage"] = readBatteryVoltage();
@@ -1912,19 +1887,12 @@ void sendPeriodicStatus() {
       udp.endPacket();
     }
   } else {
-    // Fallback: broadcast to ALL subnets (global broadcast)
-    // This ensures tricorders on different subnets can reach the server
-    IPAddress broadcastIPs[] = {
-      IPAddress(255, 255, 255, 255),                         // Global broadcast (reaches all subnets)
-      IPAddress(192, 168, 1, 255),                           // 192.168.1.x broadcast  
-      IPAddress(192, 168, 0, 255)                            // 192.168.0.x broadcast
-    };
-    
-    for (int i = 0; i < 3; i++) {
-      udp.beginPacket(broadcastIPs[i], UDP_PORT);
-      udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
-      udp.endPacket();
-    }
+    // Fallback: broadcast to local subnet
+    IPAddress localIP = WiFi.localIP();
+    IPAddress broadcastIP = IPAddress(localIP[0], localIP[1], localIP[2], 255);
+    udp.beginPacket(broadcastIP, UDP_PORT);
+    udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
+    udp.endPacket();
   }
 }
 
@@ -2965,7 +2933,7 @@ void handleRoot() {
   html += "<p><strong>Prop ID:</strong> " + String(tricorderConfig.getPropId()) + "</p>";
   html += "<p><strong>Description:</strong> " + String(tricorderConfig.getDescription()) + "</p>";
   html += "<p><strong>IP Address:</strong> " + WiFi.localIP().toString() + "</p>";
-  html += "<p><strong>Firmware:</strong> Enhanced Tricorder v2.2 OTA</p>";
+  html += "<p><strong>Firmware:</strong> IV Station v1.0 OTA</p>";
   html += "<p><strong>WiFi RSSI:</strong> " + String(WiFi.RSSI()) + " dBm</p>";
   html += "<p><strong>Free Heap:</strong> " + String(ESP.getFreeHeap()) + " bytes</p>";
   html += "<p><strong>Battery:</strong> " + getBatteryStatus() + "</p>";
@@ -3000,8 +2968,8 @@ void handleRoot() {
   html += "1. <strong>Runtime Reset:</strong> Hold <strong>BOOT button for 5 seconds</strong> while device is running<br>";
   html += "2. <strong>Boot Reset:</strong> Short <strong>GPIO12 to Ground</strong> during startup<br>";
   html += "3. <strong>Alternative:</strong> Short <strong>GPIO13 to Ground</strong> during startup<br>";
-  html += "4. Device will create an access point: <strong>Tricorder-" + deviceId + "</strong><br>";
-  html += "5. Password: <strong>tricorder123</strong><br>";
+  html += "4. Device will create an access point: <strong>IVStation-" + deviceId + "</strong><br>";
+  html += "5. Password: <strong>ivstation123</strong><br>";
   html += "6. Connect and visit <strong>http://192.168.4.1</strong>";
   html += "</div>";
   
@@ -3178,7 +3146,7 @@ void handleGetStatus() {
   
   doc["deviceLabel"] = tricorderConfig.getDeviceLabel();
   doc["propId"] = tricorderConfig.getPropId();
-  doc["firmwareVersion"] = "Enhanced Tricorder v2.2 OTA";
+  doc["firmwareVersion"] = "IV Station v1.0 OTA";
   doc["ipAddress"] = WiFi.localIP().toString();
   doc["macAddress"] = WiFi.macAddress();
   doc["wifiRSSI"] = WiFi.RSSI();
@@ -3301,7 +3269,7 @@ void displaySystemStatus() {
   tft.setTextColor(TFT_CYAN);
   tft.setTextSize(2);
   tft.setCursor(10, 10);
-  tft.println("TRICORDER STATUS");
+  tft.println("IV STATION STATUS");
   
   tft.setTextSize(1);
   tft.setTextColor(TFT_WHITE);
@@ -3342,7 +3310,7 @@ void displaySystemStatus() {
     
     tft.setTextColor(TFT_WHITE);
     tft.setCursor(10, y);
-    tft.printf("AP: Tricorder-%s", deviceId.c_str());
+    tft.printf("AP: IVStation-%s", deviceId.c_str());
     y += lineHeight;
     
     tft.setCursor(10, y);
@@ -3350,7 +3318,7 @@ void displaySystemStatus() {
     y += lineHeight;
     
     tft.setCursor(10, y);
-    tft.println("Password: tricorder123");
+    tft.println("Password: ivstation123");
     y += lineHeight;
     
   } else {

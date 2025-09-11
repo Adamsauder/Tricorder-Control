@@ -34,9 +34,10 @@ Film set prop control system with ESP32 devices, real-time web dashboard, and hy
 - **IV Injectors**: ESP32-C3 + 1 NeoPixel (✅ OTA system complete)
 - **Tricorders**: ESP32 + TFT display + NeoPixels + SD video playback (✅ Complete with folder controls)
 - **Polyinoculators**: ESP32-C3 + 3 NeoPixel strips (15 LEDs total) (✅ Complete)
-- **IV Stations**: ESP32 + TFT display + modified LED configuration (🔄 In development)
-- **Ostoregenerators**: ESP32-C3 + 1 NeoPixel + specialized firmware (🔄 In development)  
-- **Hand Scanners**: ESP32-C3 + 1 NeoPixel + scanner-specific features (🔄 In development)
+- **IV Stations**: ESP32 + TFT display + modified LED configuration (✅ Complete)
+- **Ostoregenerators**: ESP32-C3 + 1 NeoPixel + specialized firmware (✅ Complete)  
+- **Hand Scanners**: ESP32-C3 + 1 NeoPixel + scanner-specific features (✅ Complete)
+- **Pin Stands**: ESP32-C3 + 1 NeoPixel + pin stand functionality (✅ Complete)
 
 All devices support OTA updates, network configuration, and SACN/UDP hybrid control.
 
@@ -58,13 +59,14 @@ cd web && npm run dev           # React dev server
 # PlatformIO (preferred) - use individual project folders
 cd firmware/tricorder/ && pio run -t upload        # ESP32 with display
 cd firmware/polyinoculator/ && pio run -t upload   # ESP32-C3 with 3 LED strips
-cd firmware/defragmentor/ && pio run -t upload     # ESP32-C3 with servo + 2 LEDs  
 cd firmware/iv_injector/ && pio run -t upload      # ESP32-C3 with 1 LED
+cd firmware/iv_station/ && pio run -t upload       # ESP32 with display (modified Tricorder)
+cd firmware/ostoregenerator/ && pio run -t upload  # ESP32-C3 with 1 LED (modified IV Injector)
+cd firmware/hand_scanner/ && pio run -t upload     # ESP32-C3 with 1 LED (modified IV Injector)
+cd firmware/pin_stand/ && pio run -t upload        # ESP32-C3 with 1 LED (modified IV Injector)
 
 # Or use VS Code tasks
 Ctrl+Shift+P → Tasks: Run Task → "Upload [Device] Firmware"
-
-# Or use VS Code workspace: firmware/tricorder-workspace.code-workspace
 ```
 
 ### Testing Commands
@@ -77,17 +79,18 @@ python server/quick_test.py        # End-to-end system test
 ## Key Code Patterns
 
 ### Server Architecture (Flask + SocketIO)
-- **Main server**: `server/enhanced_server.py` - Flask app with UDP listener thread
+- **Main server**: `server/enhanced_server.py` - Flask app with UDP listener thread, OTA system, network config
 - **SACN integration**: `server/enhanced_sacn_controller.py` - E1.31 protocol handler
 - **Device state**: Global `devices` dict updated via UDP heartbeats, broadcast via SocketIO
 - **Command flow**: Web → Flask endpoint → UDP to device → response via SocketIO
-- **Prop grouping**: Group devices by `device_type` field for bulk operations (SACN addressing, firmware updates)
+- **Prop grouping**: Group devices by `device_type` field for table view and bulk operations
 
 ### Bulk Operations Pattern
 - **SACN address setting**: `/api/props/{prop_type}/sacn/address` - Set universe.address for all online devices of type
-- **Firmware updates**: `/api/props/{prop_type}/firmware/update` - Push .bin file to all devices of type
+- **Network configuration**: `/api/props/{prop_type}/network/config` - Set DHCP toggle and static IP for all devices
+- **Firmware updates**: `/api/props/{prop_type}/firmware/update` - Push .bin file to all devices of type via OTA
 - **Group commands**: `/api/props/{prop_type}/command` - Send action to all devices of prop type
-- **Type filtering**: Filter `devices` dict by device type extracted from `device_id` prefix or explicit field
+- **Table view selection**: Multi-device selection in web interface for bulk operations
 
 ### ESP32 Firmware Patterns
 - **WiFi + UDP setup** in `setup()`: Auto-connect, mDNS registration, UDP port 8888
@@ -115,16 +118,19 @@ python server/quick_test.py        # End-to-end system test
 - **Group firmware updates**: Iterate through devices of same type, send OTA update sequentially with progress tracking
 
 ### File Organization  
-- **Active code**: `/server/enhanced_server.py`, `/web/src/`, `/firmware/{tricorder,polyinoculator,defragmentor,iv_injector}/`
+- **Active code**: `/server/enhanced_server.py`, `/web/src/`, `/firmware/{tricorder,polyinoculator,iv_injector}/`
 - **Archived code**: `/archive/` - legacy servers, old firmware, test scripts  
 - **Convenience scripts**: Root-level `.bat`/`.ps1` files for common tasks
-- **New firmware needed**: `/firmware/iv_blood_bag_station/`, `/firmware/polyinoculator_cradle/`
-
+- **New firmware needed**: `/firmware/iv_station/`, `/firmware/ostoregenerator/`, `/firmware/hand_scanner/`
+- **Archived code**: `/archive/` - legacy servers, old firmware, test scripts  
+- **Convenience scripts**: Root-level `.bat`/`.ps1` files for common tasks
 ### Hardware-Specific Details
 - **Tricorder**: ESP32-2432S032C-I with ST7789 TFT (320x240), SD card, 12x WS2812B on GPIO2
 - **Polyinoculator**: ESP32-C3 XIAO with 3 LED strips (GPIO10: 7 LEDs, GPIO6: 4 LEDs, GPIO7: 4 LEDs)
-- **Defragmentor**: ESP32-C3 XIAO with 2x RGBW SK6812 LEDs (GPIO4), servo (GPIO10), trigger input (GPIO5)
 - **IV Injector**: ESP32-C3 XIAO with 1x WS2812B LED (GPIO5)
+- **IV Station**: ESP32-2432S032C-I (same as Tricorder) with modified LED count for station configuration
+- **Ostoregenerator**: ESP32-C3 XIAO (same as IV Injector) with specialized osteo regeneration features
+- **Hand Scanner**: ESP32-C3 XIAO (same as IV Injector) with scanner-specific UI and features
 - **Pin configurations**: Defined in platformio.ini build flags, not in code comments
 
 ### Performance Requirements

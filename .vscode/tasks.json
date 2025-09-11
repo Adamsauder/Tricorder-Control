@@ -1,621 +1,869 @@
 {
-  "version": "2.0.0",
-  "inputs": [
-    {
-      "id": "comPort",
-      "description": "COM Port (e.g., COM3, COM4)",
-      "default": "COM3",
-      "type": "promptString"
-    }
-  ],
-  "tasks": [
-    {
-      "label": "Install Python Dependencies",
-      "type": "shell",
-      "command": "C:/Prop Control/Prop-Control/.venv/Scripts/python.exe",
-      "args": [
-        "-m",
-        "pip",
-        "install",
-        "-r",
-        "server/requirements.txt"
-      ],
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Start Python Server",
-      "type": "shell",
-      "command": "C:/Prop Control/Prop-Control/.venv/Scripts/python.exe",
-      "args": [
-        "server/enhanced_server.py"
-      ],
-      "group": "build",
-      "isBackground": true,
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Install Web Dependencies",
-      "type": "shell",
-      "command": "cmd",
-      "args": ["/c", "npm", "install"],
-      "options": {
-        "cwd": "${workspaceFolder}/web",
-        "shell": {
-          "executable": "cmd.exe",
-          "args": ["/d", "/c"]
-        }
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Start Web Development Server",
-      "type": "shell",
-      "command": "cmd",
-      "args": ["/c", "npm", "run", "dev"],
-      "options": {
-        "cwd": "${workspaceFolder}/web",
-        "shell": {
-          "executable": "cmd.exe",
-          "args": ["/d", "/c"]
-        }
-      },
-      "group": "build",
-      "isBackground": true,
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Build Web Application",
-      "type": "shell",
-      "command": "cmd",
-      "args": ["/c", "npm", "run", "build"],
-      "options": {
-        "cwd": "${workspaceFolder}/web",
-        "shell": {
-          "executable": "cmd.exe",
-          "args": ["/d", "/c"]
-        }
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Compile Defragmentor Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/defragmentor"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/defragmentor"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Upload Defragmentor Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run", "--target", "upload", "--upload-port", "${input:comPort}"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/defragmentor"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/defragmentor"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Build and Upload Defragmentor",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "Compile Defragmentor Firmware",
-        "Upload Defragmentor Firmware"
-      ],
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Compile IV Injector Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/iv_injector"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/iv_injector"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Upload IV Injector Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run", "--target", "upload", "--upload-port", "${input:comPort}"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/iv_injector"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/iv_injector"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Build and Upload IV Injector",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "Compile IV Injector Firmware",
-        "Upload IV Injector Firmware"
-      ],
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Compile Polyinoculator Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/polyinoculator"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/polyinoculator"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Upload Polyinoculator Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run", "--target", "upload", "--upload-port", "${input:comPort}"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/polyinoculator"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/polyinoculator"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Build and Upload Polyinoculator",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "Compile Polyinoculator Firmware",
-        "Upload Polyinoculator Firmware"
-      ],
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Compile Tricorder Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/tricorder"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/tricorder"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Upload Tricorder Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run", "--target", "upload", "--upload-port", "${input:comPort}"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/tricorder"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/tricorder"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Build and Upload Tricorder",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "Compile Tricorder Firmware",
-        "Upload Tricorder Firmware"
-      ],
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Compile Tricorder v3 Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/tricorder_v3"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/tricorder_v3"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Upload Tricorder v3 Firmware",
-      "type": "shell",
-      "command": "pio",
-      "args": ["run", "--target", "upload", "--upload-port", "${input:comPort}"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/tricorder_v3"
-      },
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "problemMatcher": {
-        "owner": "cpp",
-        "fileLocation": ["relative", "${workspaceFolder}/firmware/tricorder_v3"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    },
-    {
-      "label": "Build and Upload Tricorder v3",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "Compile Tricorder v3 Firmware",
-        "Upload Tricorder v3 Firmware"
-      ],
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Monitor Tricorder v3 Serial",
-      "type": "shell",
-      "command": "pio",
-      "args": ["device", "monitor"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/tricorder_v3"
-      },
-      "group": "test",
-      "isBackground": true,
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Setup Complete Development Environment",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "Install Python Dependencies",
-        "Install Web Dependencies"
-      ],
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Monitor Defragmentor Serial",
-      "type": "shell",
-      "command": "pio",
-      "args": ["device", "monitor"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/defragmentor"
-      },
-      "group": "test",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "isBackground": true,
-      "problemMatcher": []
-    },
-    {
-      "label": "Monitor IV Injector Serial",
-      "type": "shell",
-      "command": "pio",
-      "args": ["device", "monitor"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/iv_injector"
-      },
-      "group": "test",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "isBackground": true,
-      "problemMatcher": []
-    },
-    {
-      "label": "Monitor Polyinoculator Serial",
-      "type": "shell",
-      "command": "pio",
-      "args": ["device", "monitor"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/polyinoculator"
-      },
-      "group": "test",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "isBackground": true,
-      "problemMatcher": []
-    },
-    {
-      "label": "Monitor Tricorder Serial",
-      "type": "shell",
-      "command": "pio",
-      "args": ["device", "monitor"],
-      "options": {
-        "cwd": "${workspaceFolder}/firmware/tricorder"
-      },
-      "group": "test",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "isBackground": true,
-      "problemMatcher": []
-    },
-    {
-      "label": "Build All Firmware",
-      "dependsOrder": "parallel",
-      "dependsOn": [
-        "Compile Defragmentor Firmware",
-        "Compile IV Injector Firmware",
-        "Compile Polyinoculator Firmware",
-        "Compile Tricorder Firmware"
-      ],
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Start Full System",
-      "dependsOrder": "parallel",
-      "dependsOn": [
-        "Start Python Server",
-        "Start Web Development Server"
-      ],
-      "group": "build",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": false,
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "Quick Test Tricorder",
-      "type": "shell",
-      "command": "C:/Prop Control/Prop-Control/.venv/Scripts/python.exe",
-      "args": [
-        "server/quick_test.py"
-      ],
-      "group": "test",
-      "presentation": {
-        "echo": true,
-        "reveal": "always",
-        "focus": true,
-        "panel": "shared"
-      },
-      "problemMatcher": []
-    }
-  ]
+	"version": "2.0.0",
+	"inputs": [
+		{
+			"id": "comPort",
+			"description": "COM Port (e.g., COM3, COM4)",
+			"default": "COM3",
+			"type": "promptString"
+		}
+	],
+	"tasks": [
+		{
+			"label": "Install Python Dependencies",
+			"type": "shell",
+			"command": "C:/Prop Control/Prop-Control/.venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"pip",
+				"install",
+				"-r",
+				"server/requirements.txt"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Start Python Server",
+			"type": "shell",
+			"command": "C:/Prop Control/Prop-Control/.venv/Scripts/python.exe",
+			"args": [
+				"server/enhanced_server.py"
+			],
+			"group": "build",
+			"isBackground": true,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Install Web Dependencies",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/c",
+				"npm",
+				"install"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/web",
+				"shell": {
+					"executable": "cmd.exe",
+					"args": [
+						"/d",
+						"/c"
+					]
+				}
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Start Web Development Server",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/c",
+				"npm",
+				"run",
+				"dev"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/web",
+				"shell": {
+					"executable": "cmd.exe",
+					"args": [
+						"/d",
+						"/c"
+					]
+				}
+			},
+			"group": "build",
+			"isBackground": true,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Build Web Application",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/c",
+				"npm",
+				"run",
+				"build"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/web",
+				"shell": {
+					"executable": "cmd.exe",
+					"args": [
+						"/d",
+						"/c"
+					]
+				}
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Compile Defragmentor Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/defragmentor"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/defragmentor"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload Defragmentor Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/defragmentor"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/defragmentor"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Build and Upload Defragmentor",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile Defragmentor Firmware",
+				"Upload Defragmentor Firmware"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Compile IV Injector Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/iv_injector"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/iv_injector"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload IV Injector Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/iv_injector"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/iv_injector"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Build and Upload IV Injector",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile IV Injector Firmware",
+				"Upload IV Injector Firmware"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Compile Polyinoculator Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/polyinoculator"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/polyinoculator"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload Polyinoculator Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/polyinoculator"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/polyinoculator"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Build and Upload Polyinoculator",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile Polyinoculator Firmware",
+				"Upload Polyinoculator Firmware"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Compile Tricorder Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/tricorder"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/tricorder"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload Tricorder Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/tricorder"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/tricorder"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Build and Upload Tricorder",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile Tricorder Firmware",
+				"Upload Tricorder Firmware"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Compile Tricorder v3 Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/tricorder_v3"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/tricorder_v3"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload Tricorder v3 Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/tricorder_v3"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/tricorder_v3"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Build and Upload Tricorder v3",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile Tricorder v3 Firmware",
+				"Upload Tricorder v3 Firmware"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Monitor Tricorder v3 Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/tricorder_v3"
+			},
+			"group": "test",
+			"isBackground": true,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Setup Complete Development Environment",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Install Python Dependencies",
+				"Install Web Dependencies"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Monitor Defragmentor Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/defragmentor"
+			},
+			"group": "test",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Monitor IV Injector Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/iv_injector"
+			},
+			"group": "test",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Monitor Polyinoculator Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/polyinoculator"
+			},
+			"group": "test",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Monitor Tricorder Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/tricorder"
+			},
+			"group": "test",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Build All Firmware",
+			"dependsOrder": "parallel",
+			"dependsOn": [
+				"Compile Defragmentor Firmware",
+				"Compile IV Injector Firmware",
+				"Compile Polyinoculator Firmware",
+				"Compile Tricorder Firmware"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Start Full System",
+			"dependsOrder": "parallel",
+			"dependsOn": [
+				"Start Python Server",
+				"Start Web Development Server"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Quick Test Tricorder",
+			"type": "shell",
+			"command": "C:/Prop Control/Prop-Control/.venv/Scripts/python.exe",
+			"args": [
+				"server/quick_test.py"
+			],
+			"group": "test",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Compile IV Station Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/iv_station"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/iv_station"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload IV Station Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"COM39"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/iv_station"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/iv_station"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Compile Hand Scanner Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/hand_scanner"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/hand_scanner"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload Hand Scanner Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/hand_scanner"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/hand_scanner"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		}
+	]
 }

@@ -23,6 +23,7 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  Tooltip,
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
@@ -35,6 +36,7 @@ import {
   Stop as StopIcon,
   Palette as PaletteIcon,
   Save as SaveIcon,
+  OpenInNew as OpenInNewIcon,
 } from '@mui/icons-material';
 import { TricorderDevice, tricorderAPI, FirmwareInfo } from '../services/tricorderAPI';
 
@@ -296,6 +298,16 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
                     color={getStatusColor(device.status) as any}
                     size="small"
                   />
+                  <Tooltip title="Open Device Web Page">
+                    <IconButton
+                      size="small"
+                      onClick={() => window.open(`http://${device.ip_address}`, '_blank')}
+                      disabled={device.status !== 'online'}
+                      sx={{ ml: 1 }}
+                    >
+                      <OpenInNewIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
                 </ListItem>
               ))}
             </List>

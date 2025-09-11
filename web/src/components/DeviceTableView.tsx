@@ -41,6 +41,7 @@ import {
   WifiOff as WifiOffIcon,
   Refresh as RefreshIcon,
   Settings as SettingsIcon,
+  OpenInNew as OpenInNewIcon,
 } from '@mui/icons-material';
 
 const API_BASE = 'http://192.168.1.24:8080';
@@ -562,6 +563,7 @@ const DeviceTableView: React.FC = () => {
               <TableCell>LEDs</TableCell>
               <TableCell>Uptime</TableCell>
               <TableCell>Firmware</TableCell>
+              <TableCell>Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -672,6 +674,18 @@ const DeviceTableView: React.FC = () => {
                   <Typography variant="caption" color="text.secondary">
                     {device.firmware_version || 'Unknown'}
                   </Typography>
+                </TableCell>
+                
+                <TableCell>
+                  <Tooltip title="Open Device Web Page">
+                    <IconButton
+                      size="small"
+                      onClick={() => window.open(`http://${device.ip_address}`, '_blank')}
+                      disabled={device.status !== 'online'}
+                    >
+                      <OpenInNewIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
                 </TableCell>
               </TableRow>
             ))}

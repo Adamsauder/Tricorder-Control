@@ -97,7 +97,7 @@ TricorderConfig tricorderConfig;
 
 // Global configuration variables (loaded from tricorderConfig)
 String deviceId;
-String firmwareVersion = "Enhanced Tricorder v2.4 sACN-Status";
+String firmwareVersion = "Enhanced Tricorder v2.3 OTA";
 
 // Forward declaration of LED array (defined later)
 extern CRGB leds[NUM_NEOPIXELS];
@@ -1808,9 +1808,8 @@ void discoverServers() {
   // Broadcast discovery to multiple subnets
   IPAddress localIP = WiFi.localIP();
   
-  // Try multiple broadcast addresses for better subnet coverage
+  // Try multiple subnet broadcasts
   IPAddress broadcastIPs[] = {
-    IPAddress(255, 255, 255, 255),                         // Global broadcast (reaches all subnets)
     IPAddress(localIP[0], localIP[1], localIP[2], 255),    // Local subnet broadcast
     IPAddress(192, 168, 1, 255),                           // 192.168.1.x broadcast
     IPAddress(192, 168, 0, 255),                           // 192.168.0.x broadcast
@@ -1818,7 +1817,7 @@ void discoverServers() {
   };
   
   // Send discovery to all broadcast addresses
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 4; i++) {
     udp.beginPacket(broadcastIPs[i], UDP_PORT);
     udp.write((const uint8_t*)discoveryMsg.c_str(), discoveryMsg.length());
     udp.endPacket();
@@ -1884,12 +1883,6 @@ void sendPeriodicStatus() {
   doc["currentFrame"] = currentFrame;
   doc["timestamp"] = millis();
   
-  // Include sACN information in periodic status
-  doc["sacnUniverse"] = sacnUniverse;
-  doc["sacnAddress"] = sacnStartAddress;
-  doc["sacnEnabled"] = sacnEnabled;
-  doc["sacnActive"] = sacnActive;
-  
   // Include battery information in periodic status
   doc["batteryVoltage"] = readBatteryVoltage();
   doc["batteryPercentage"] = getBatteryPercentage();
@@ -1912,19 +1905,12 @@ void sendPeriodicStatus() {
       udp.endPacket();
     }
   } else {
-    // Fallback: broadcast to ALL subnets (global broadcast)
-    // This ensures tricorders on different subnets can reach the server
-    IPAddress broadcastIPs[] = {
-      IPAddress(255, 255, 255, 255),                         // Global broadcast (reaches all subnets)
-      IPAddress(192, 168, 1, 255),                           // 192.168.1.x broadcast  
-      IPAddress(192, 168, 0, 255)                            // 192.168.0.x broadcast
-    };
-    
-    for (int i = 0; i < 3; i++) {
-      udp.beginPacket(broadcastIPs[i], UDP_PORT);
-      udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
-      udp.endPacket();
-    }
+    // Fallback: broadcast to local subnet
+    IPAddress localIP = WiFi.localIP();
+    IPAddress broadcastIP = IPAddress(localIP[0], localIP[1], localIP[2], 255);
+    udp.beginPacket(broadcastIP, UDP_PORT);
+    udp.write((const uint8_t*)statusMsg.c_str(), statusMsg.length());
+    udp.endPacket();
   }
 }
 
@@ -2965,7 +2951,7 @@ void handleRoot() {
   html += "<p><strong>Prop ID:</strong> " + String(tricorderConfig.getPropId()) + "</p>";
   html += "<p><strong>Description:</strong> " + String(tricorderConfig.getDescription()) + "</p>";
   html += "<p><strong>IP Address:</strong> " + WiFi.localIP().toString() + "</p>";
-  html += "<p><strong>Firmware:</strong> Enhanced Tricorder v2.2 OTA</p>";
+  html += "<p><strong>Firmware:</strong> Enhanced Tricorder v2.1 OTA</p>";
   html += "<p><strong>WiFi RSSI:</strong> " + String(WiFi.RSSI()) + " dBm</p>";
   html += "<p><strong>Free Heap:</strong> " + String(ESP.getFreeHeap()) + " bytes</p>";
   html += "<p><strong>Battery:</strong> " + getBatteryStatus() + "</p>";
@@ -3178,7 +3164,7 @@ void handleGetStatus() {
   
   doc["deviceLabel"] = tricorderConfig.getDeviceLabel();
   doc["propId"] = tricorderConfig.getPropId();
-  doc["firmwareVersion"] = "Enhanced Tricorder v2.2 OTA";
+  doc["firmwareVersion"] = "Enhanced Tricorder v2.1 OTA";
   doc["ipAddress"] = WiFi.localIP().toString();
   doc["macAddress"] = WiFi.macAddress();
   doc["wifiRSSI"] = WiFi.RSSI();

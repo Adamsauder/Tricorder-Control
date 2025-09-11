@@ -15,10 +15,10 @@
 #include "PropConfig.h"
 
 // Pin definitions for ESP32-C3 XIAO
-#define LED_PIN D3    // D3 (GPIO5) - 18 WS2812B LEDs
-#define NUM_LEDS 18   // 18 RGB pixels for hand scanner
+#define LED_PIN D3    // D3 (GPIO5) - Single WS2812B LED
+#define NUM_LEDS 1    // Single LED
 
-// LED configuration for WS2812B RGB LED strip
+// LED configuration for WS2812B RGB LED
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // Network settings
@@ -47,7 +47,7 @@ PropConfig::Config config;
 String deviceId;  // Will be generated uniquely from MAC address
 String deviceLabel = "IV Injector 001";
 String deviceType = "iv_injector";
-String firmwareVersion = "Hand Scanner v1.1 - 18 RGB Pixels";
+String firmwareVersion = "Hand Scanner v1.0";
 int sacnUniverse = 1;
 int sacnStartAddress = 1;
 int ledBrightness = 128;
@@ -279,10 +279,8 @@ void initializeWiFi() {
     Serial.print(".");
     attempts++;
     
-    // Blink all LEDs during connection attempts
-    for (int i = 0; i < NUM_LEDS; i++) {
-      strip.setPixelColor(i, strip.Color(0, 0, 255));  // Blue
-    }
+    // Blink LED during connection attempts
+    strip.setPixelColor(0, strip.Color(0, 0, 255));  // Blue
     strip.show();
     delay(100);
     strip.clear();
@@ -310,9 +308,7 @@ void initializeWiFi() {
     
     // Green flash for successful connection
     for (int i = 0; i < 2; i++) {
-      for (int j = 0; j < NUM_LEDS; j++) {
-        strip.setPixelColor(j, strip.Color(0, 255, 0));  // Green
-      }
+      strip.setPixelColor(0, strip.Color(0, 255, 0));  // Green
       strip.show();
       delay(100);
       strip.clear();
@@ -323,9 +319,7 @@ void initializeWiFi() {
     Serial.println("\nWiFi connection failed!");
     // Red flash for failed connection
     for (int i = 0; i < 5; i++) {
-      for (int j = 0; j < NUM_LEDS; j++) {
-        strip.setPixelColor(j, strip.Color(255, 0, 0));  // Red
-      }
+      strip.setPixelColor(0, strip.Color(255, 0, 0));  // Red
       strip.show();
       delay(200);
       strip.clear();
@@ -851,34 +845,26 @@ void processSACNPacket(uint8_t* buffer, size_t length) {
 }
 
 void setLEDFromSACN() {
-  if (!sacnActive || sacnStartAddress < 1 || sacnStartAddress > 457) {  // 512 - 54 channels = 458 max start
+  if (!sacnActive || sacnStartAddress < 1 || sacnStartAddress > 509) {
     return;
   }
   
-  Serial.println("=== setLEDFromSACN: Processing 18 RGB pixels ===");
+  // Single LED uses 3 channels: R, G, B
+  uint8_t r = lastSacnData[sacnStartAddress - 1];     // DMX is 1-based, array is 0-based
+  uint8_t g = lastSacnData[sacnStartAddress];
+  uint8_t b = lastSacnData[sacnStartAddress + 1];
   
-  // Update all 18 LEDs from sACN data
-  for (int i = 0; i < NUM_LEDS; i++) {
-    // Each LED uses 3 channels: R, G, B
-    int channelOffset = (i * 3);
-    uint8_t r = lastSacnData[sacnStartAddress - 1 + channelOffset];     // DMX is 1-based, array is 0-based
-    uint8_t g = lastSacnData[sacnStartAddress - 1 + channelOffset + 1];
-    uint8_t b = lastSacnData[sacnStartAddress - 1 + channelOffset + 2];
-    
-    // Set the pixel color
-    strip.setPixelColor(i, strip.Color(r, g, b));
-    
-    // Store current values for first LED for status reporting
-    if (i == 0) {
-      currentR = r;
-      currentG = g;
-      currentB = b;
-    }
-  }
+  Serial.printf("=== setLEDFromSACN: RGB(%d, %d, %d) ===\n", r, g, b);
   
-  // Update the entire strip
+  // Direct LED update from sACN - bypass priority check
+  currentR = r;
+  currentG = g;
+  currentB = b;
+  
+  Serial.printf("sACN setting LED to RGB(%d, %d, %d)...\n", r, g, b);
+  strip.setPixelColor(0, strip.Color(r, g, b));
   strip.show();
-  Serial.printf("✅ sACN updated 18 LEDs starting from channel %d\n", sacnStartAddress);
+  Serial.println("✅ sACN LED update complete!");
   
   lastActivity = millis();
   
@@ -891,7 +877,7 @@ void setLEDFromSACN() {
 }
 
 void setLEDColor(uint8_t r, uint8_t g, uint8_t b) {
-  Serial.printf("=== setLEDColor called: RGB(%d, %d, %d) for 18 LEDs ===\n", r, g, b);
+  Serial.printf("=== setLEDColor called: RGB(%d, %d, %d) ===\n", r, g, b);
   Serial.printf("sACN Priority: %s, sACN Active: %s\n", 
                 sacnPriority ? "TRUE" : "FALSE", 
                 sacnActive ? "TRUE" : "FALSE");
@@ -906,14 +892,10 @@ void setLEDColor(uint8_t r, uint8_t g, uint8_t b) {
   currentG = g;
   currentB = b;
   
-  Serial.printf("Setting all 18 LEDs to RGB(%d, %d, %d)...\n", r, g, b);
-  
-  // Set all 18 LEDs to the same color
-  for (int i = 0; i < NUM_LEDS; i++) {
-    strip.setPixelColor(i, strip.Color(r, g, b));
-  }
+  Serial.printf("Setting LED to RGB(%d, %d, %d)...\n", r, g, b);
+  strip.setPixelColor(0, strip.Color(r, g, b));
   strip.show();
-  Serial.println("✅ All 18 LEDs updated!");
+  Serial.println("✅ LED update complete!");
   
   lastActivity = millis();
 }
@@ -949,14 +931,10 @@ void setLEDPattern(String pattern) {
 
 void indicateActivity() {
   // Brief flash to indicate command received
-  for (int i = 0; i < NUM_LEDS; i++) {
-    strip.setPixelColor(i, strip.Color(255, 255, 255));  // White flash
-  }
+  strip.setPixelColor(0, strip.Color(255, 255, 255));  // White flash
   strip.show();
   delay(50);
-  for (int i = 0; i < NUM_LEDS; i++) {
-    strip.setPixelColor(i, strip.Color(currentR, currentG, currentB));  // Back to current color
-  }
+  strip.setPixelColor(0, strip.Color(currentR, currentG, currentB));  // Back to current color
   strip.show();
 }
 

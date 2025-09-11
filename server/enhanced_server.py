@@ -49,26 +49,6 @@ CONFIG = {
 
 # Global state
 devices: Dict[str, Dict] = {}
-
-# Helper functions for device management with composite keys
-def find_device_by_id(device_id: str):
-    """Find a device by device_id, returning the first match (for backward compatibility)"""
-    for device_key, device in devices.items():
-        if device.get('device_id') == device_id:
-            return device
-    return None
-
-def find_all_devices_by_id(device_id: str):
-    """Find all devices with the same device_id (multiple IPs)"""
-    return [device for device in devices.values() if device.get('device_id') == device_id]
-
-def get_device_by_key(device_key: str):
-    """Get a device by its composite key (device_id@ip_address)"""
-    return devices.get(device_key)
-
-def get_device_key(device_id: str, ip_address: str):
-    """Generate a device key from device_id and IP address"""
-    return f"{device_id}@{ip_address}"
 active_commands: Dict[str, Dict] = {}
 command_history: List[Dict] = []
 server_ip: Optional[str] = None
@@ -238,14 +218,9 @@ class TricorderServer:
                 print(f"🚫 Ignoring unsupported device: {device_id} from {addr[0]}")
                 return
             
-            # Create a unique device key combining device_id and IP address
-            # This prevents devices with duplicate IDs from overwriting each other
-            device_key = f"{device_id}@{addr[0]}"
-            
             # Update device registry with comprehensive info
-            devices[device_key] = {
+            devices[device_id] = {
                 'device_id': device_id,
-                'device_key': device_key,  # Store the composite key for reference
                 'device_type': device_type,
                 'device_label': data.get('deviceLabel', device_id),  # Use deviceLabel if available, fallback to device_id
                 'fixture_number': data.get('fixtureNumber', 1),  # Default to fixture 1 if not specified
@@ -260,14 +235,14 @@ class TricorderServer:
                 'uptime': data.get('uptime'),
                 # Standardized sACN fields (normalize field names)
                 'sacn_universe': data.get('sacnUniverse', data.get('sacn_universe', 1)),
-                'dmx_address': data.get('dmxStartAddress', data.get('sacnAddress', data.get('dmx_address', data.get('dmxAddress', 1)))),
+                'dmx_address': data.get('dmxStartAddress', data.get('dmx_address', data.get('dmxAddress', 1))),
                 'sacn_enabled': data.get('sacnEnabled', data.get('sacn_enabled', True)),
                 **data  # Include any additional fields
             }
             
             # Add device-specific fields
             if device_type == 'tricorder':
-                devices[device_key].update({
+                devices[device_id].update({
                     'sd_card_initialized': data.get('sdCardInitialized'),
                     'video_playing': data.get('videoPlaying'),
                     'current_video': data.get('currentVideo'),
@@ -278,14 +253,14 @@ class TricorderServer:
                     'battery_status': data.get('batteryStatus'),
                 })
             elif device_type == 'polyinoculator':
-                devices[device_key].update({
+                devices[device_id].update({
                     'num_leds': data.get('numLeds', 15),  # Updated for 3-strip configuration
                     'brightness': data.get('brightness', 128),
                     'sacn_enabled': data.get('sacnEnabled', True),
                     'sacn_universe': data.get('sacnUniverse', 1),
                 })
             elif device_type == 'defragmentor':
-                devices[device_key].update({
+                devices[device_id].update({
                     'num_leds': data.get('numLeds', 2),  # 2 RGBW LEDs
                     'servo_position': data.get('servoPosition', 0),
                     'trigger_state': data.get('triggerState', False),
@@ -294,7 +269,7 @@ class TricorderServer:
                     'sacn_universe': data.get('sacnUniverse', 1),
                 })
             elif device_type == 'iv_station':
-                devices[device_key].update({
+                devices[device_id].update({
                     'sd_card_initialized': data.get('sdCardInitialized'),
                     'video_playing': data.get('videoPlaying'),
                     'current_video': data.get('currentVideo'),
@@ -309,7 +284,7 @@ class TricorderServer:
                     'sacn_universe': data.get('sacnUniverse', 1),
                 })
             elif device_type in ['iv_injector', 'iv_blood_bag_station', 'polyinoculator_cradle']:
-                devices[device_key].update({
+                devices[device_id].update({
                     'num_leds': data.get('numLeds', 1),  # Single LED devices
                     'brightness': data.get('brightness', 128),
                     'sacn_enabled': data.get('sacnEnabled', True),
@@ -319,22 +294,21 @@ class TricorderServer:
             print(f"✓ Updated device: {device_id} ({device_type}) at {addr[0]}")
             
             # Auto-configure device for sACN control (only if not already configured)
-            device_obj = devices[device_key]  # Use the device object for cleaner code
-            if 'sacn_configured' not in device_obj:
+            if device_id not in devices or 'sacn_configured' not in devices[device_id]:
                 print(f"🔧 Configuring {device_id} for sACN...")
                 if device_type == 'tricorder':
-                    auto_configure_tricorder_for_sacn(device_id, device_obj)
+                    auto_configure_tricorder_for_sacn(device_id, devices[device_id])
                 elif device_type == 'iv_station':
-                    auto_configure_tricorder_for_sacn(device_id, device_obj)  # Use same config as tricorder
+                    auto_configure_tricorder_for_sacn(device_id, devices[device_id])  # Use same config as tricorder
                 elif device_type == 'polyinoculator':
-                    auto_configure_polyinoculator_for_sacn(device_id, device_obj)
-                device_obj['sacn_configured'] = True
+                    auto_configure_polyinoculator_for_sacn(device_id, devices[device_id])
+                devices[device_id]['sacn_configured'] = True
                 print(f"✅ {device_id} sACN configuration complete")
             else:
                 print(f"📝 {device_id} already configured for sACN")
             
             # Broadcast to web clients
-            socketio.emit('device_update', device_obj)
+            socketio.emit('device_update', devices[device_id])
             print(f"📡 Emitted device_update for {device_id}")
             
             # Also broadcast the raw response for command handling
@@ -739,9 +713,10 @@ def send_udp_command_to_device(device_id: str, action: str, parameters: dict, co
     if command_id is None:
         command_id = str(uuid.uuid4())
         
-    device = find_device_by_id(device_id)
-    if device is None:
+    if device_id not in devices:
         return False
+        
+    device = devices[device_id]
     
     # Create command in format ESP32 expects
     esp32_command = {
@@ -830,8 +805,8 @@ def send_command():
         command_history.append(command_record)
         
         # Send to device (if connected)
-        device = find_device_by_id(device_id)
-        if device:
+        if device_id in devices:
+            device = devices[device_id]
             try:
                 # Send UDP command in ESP32 format
                 command_json = json.dumps(esp32_command)
@@ -1435,9 +1410,9 @@ def set_device_label(device_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/props/<prop_type>/firmware/upload', methods=['POST'])
-def upload_prop_type_firmware(prop_type):
-    """Upload and update firmware for all online devices of a prop type"""
+@app.route('/api/props/<prop_type>/firmware/update', methods=['POST'])
+def update_prop_type_firmware(prop_type):
+    """Update firmware for all online devices of a prop type"""
     try:
         if 'firmware' not in request.files:
             return jsonify({'error': 'No firmware file provided'}), 400
@@ -1752,7 +1727,10 @@ def update_prop_firmware(prop_type):
             return jsonify({'error': f'Firmware not found for {prop_type}'}), 404
         
         # Get all online devices of this type
-        online_devices = get_online_devices_by_type(prop_type)
+        online_devices = [
+            device for device in devices.values()
+            if device.get('online', False) and device.get('type') == prop_type
+        ]
         
         if not online_devices:
             return jsonify({

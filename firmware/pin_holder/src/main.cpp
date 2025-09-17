@@ -1,6 +1,6 @@
 /*
- * Hand Scanner Firmware - sACN Compatible Single LED Device
- * ESP32-C3 XIAO based hand scanner with single WS2812B LED control and web configuration
+ * Pin Holder Firmware - sACN Compatible Single RGBW LED Device
+ * ESP32-C3 XIAO based pin holder with single WS2812B LED control and web configuration
  */
 
 #include <Arduino.h>
@@ -16,10 +16,10 @@
 
 // Pin definitions for ESP32-C3 XIAO
 #define LED_PIN D3    // D3 (GPIO5) - Single WS2812B LED
-#define NUM_LEDS 18   // 18 RGB pixels for hand scanner
+#define NUM_LEDS 1    // Single LED
 
-// LED configuration for WS2812B RGB LED strip
-Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+// LED configuration for WS2812B RGBW LED
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRBW + NEO_KHZ800);
 
 // Network settings
 #define UDP_PORT 8888      // Port for UDP status broadcasts (matches server)
@@ -35,7 +35,7 @@ static const uint8_t ACN_PACKET_IDENTIFIER[12] = {0x41, 0x53, 0x43, 0x2d, 0x45, 
 
 // System state
 bool deviceActive = false;  // false=idle, true=active
-uint8_t currentR = 0, currentG = 0, currentB = 0;  // Current LED color
+uint8_t currentR = 0, currentG = 0, currentB = 0, currentW = 0;  // Current LED color including white
 unsigned long lastActivity = 0;
 unsigned long lastStatusBroadcast = 0;
 
@@ -45,13 +45,13 @@ PropConfig::Config config;
 
 // Device configuration variables - loaded from persistent storage
 String deviceId;  // Will be generated uniquely from MAC address
-String deviceLabel = "Hand Scanner 001";
-String deviceType = "hand_scanner";
-String firmwareVersion = "Hand Scanner v1.3 SACN DMX81";
+String deviceLabel = "Pin Holder 001";
+String deviceType = "pin_holder";
+String firmwareVersion = "Pin Holder v1.0 SACN DMX501";
 int sacnUniverse = 1;
-int sacnStartAddress = 81;  // Hardcoded to DMX address 81 for hand scanners
+int sacnStartAddress = 501;  // Hardcoded to DMX address 501 for pin holders
 int ledBrightness = 128;
-int fixtureNumber = 4;
+int fixtureNumber = 1;
 
 // WiFi settings - loaded from configuration
 String wifiSSID = "Rigging Electric";
@@ -84,7 +84,7 @@ void handleSACNData();
 void initializeSACN();
 void processSACNPacket(uint8_t* buffer, size_t length);
 void setLEDFromSACN();
-void setLEDColor(uint8_t r, uint8_t g, uint8_t b);
+void setLEDColor(uint8_t r, uint8_t g, uint8_t b, uint8_t w = 0);
 void setLEDPattern(String pattern);
 void indicateActivity();
 void handleGetConfig(AsyncWebServerRequest *request);
@@ -113,7 +113,7 @@ String generateUniqueDeviceId() {
   Serial.printf("Low32: 0x%08X, High16: 0x%04X, Mixed: 0x%04X\n", low32, high16, uniquePart);
   
   char uniqueId[16];
-  snprintf(uniqueId, sizeof(uniqueId), "SCAN%04X", uniquePart);
+  snprintf(uniqueId, sizeof(uniqueId), "PH%04X", uniquePart);
   
   Serial.printf("Generated device ID: %s\n", uniqueId);
   
@@ -124,8 +124,8 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
   
-  Serial.println("Hand Scanner Control System Starting...");
-  Serial.println("Hardware: ESP32-C3 XIAO with Single WS2812B LED");
+  Serial.println("Pin Holder Control System Starting...");
+  Serial.println("Hardware: ESP32-C3 XIAO with Single WS2812B RGBW LED");
   Serial.printf("Firmware: %s\n", firmwareVersion.c_str());
   
   // Initialize configuration system first
@@ -279,10 +279,8 @@ void initializeWiFi() {
     Serial.print(".");
     attempts++;
     
-    // Blink all LEDs during connection attempts
-    for (int i = 0; i < NUM_LEDS; i++) {
-      strip.setPixelColor(i, strip.Color(0, 0, 255));  // Blue
-    }
+    // Blink LED during connection attempts
+    strip.setPixelColor(0, strip.Color(0, 0, 255));  // Blue
     strip.show();
     delay(100);
     strip.clear();
@@ -310,9 +308,7 @@ void initializeWiFi() {
     
     // Green flash for successful connection
     for (int i = 0; i < 2; i++) {
-      for (int j = 0; j < NUM_LEDS; j++) {
-        strip.setPixelColor(j, strip.Color(0, 255, 0));  // Green
-      }
+      strip.setPixelColor(0, strip.Color(0, 255, 0));  // Green
       strip.show();
       delay(100);
       strip.clear();
@@ -323,9 +319,7 @@ void initializeWiFi() {
     Serial.println("\nWiFi connection failed!");
     // Red flash for failed connection
     for (int i = 0; i < 5; i++) {
-      for (int j = 0; j < NUM_LEDS; j++) {
-        strip.setPixelColor(j, strip.Color(255, 0, 0));  // Red
-      }
+      strip.setPixelColor(0, strip.Color(255, 0, 0));  // Red
       strip.show();
       delay(200);
       strip.clear();
@@ -347,7 +341,7 @@ void setupWebServer() {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>IV Injector Control</title>
+    <title>Pin Holder Control</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body { font-family: Arial; margin: 20px; background: #f0f0f0; }
@@ -367,8 +361,8 @@ void setupWebServer() {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🩸 IV Injector Control</h1>
-            <p>ESP32-C3 Single LED Controller</p>
+            <h1>📌 Pin Holder Control</h1>
+            <p>ESP32-C3 Single RGBW LED Controller</p>
         </div>
         
         <div class="status" id="status">
@@ -395,7 +389,7 @@ void setupWebServer() {
             <input type="number" id="sacnUniverse" value="1" min="1" max="63999">
             
             <label>DMX Start Address:</label>
-            <input type="number" id="dmxAddress" value="81" min="1" max="512">
+            <input type="number" id="dmxAddress" value="211" min="1" max="512">
             
             <label>LED Brightness:</label>
             <input type="range" id="brightness" min="0" max="255" value="128" oninput="document.getElementById('brightnessValue').textContent=this.value">
@@ -452,7 +446,7 @@ void setupWebServer() {
         .then(config => {
             document.getElementById('deviceLabel').value = config.deviceLabel || 'IV_INJECTOR_001';
             document.getElementById('sacnUniverse').value = config.sacnUniverse || 1;
-            document.getElementById('dmxAddress').value = config.dmxStartAddress || 81;
+            document.getElementById('dmxAddress').value = config.dmxStartAddress || 211;
             document.getElementById('brightness').value = config.brightness || 128;
             document.getElementById('brightnessValue').textContent = config.brightness || 128;
         });
@@ -529,7 +523,28 @@ void setupWebServer() {
         String jsonStr;
         serializeJson(doc, jsonStr);
         
+        // Check if SACN configuration changed
+        bool sacnChanged = doc.containsKey("sacnUniverse") || doc.containsKey("dmxStartAddress");
+        
         if (propConfig.fromJSON(jsonStr)) {
+          // If SACN configuration changed, reload values and restart SACN
+          if (sacnChanged) {
+            // Reload SACN configuration from saved config
+            PropConfig::Config config;
+            propConfig.loadConfig(config);
+            sacnUniverse = config.sacnUniverse;
+            sacnStartAddress = config.dmxStartAddress;
+            ledBrightness = config.brightness;
+            
+            Serial.printf("SACN config updated: Universe %d, Address %d\n", sacnUniverse, sacnStartAddress);
+            
+            // Restart sACN with new configuration
+            if (sacnEnabled) {
+              sacnUdp.stop();
+              initializeSACN();
+            }
+          }
+          
           // Check if network configuration changed
           bool networkChanged = doc.containsKey("useDHCP") || 
                                doc.containsKey("staticIP") || 
@@ -692,7 +707,7 @@ void handleUDPCommands() {
       Serial.printf("Our device ID: '%s'\n", deviceId.c_str());
       
       // Check if command is for this device
-      if (target == deviceId || target == "ALL" || target.startsWith("IV_INJECTOR")) {
+      if (target == deviceId || target == "ALL" || target.startsWith("PIN_HOLDER")) {
         Serial.printf("✅ Command matches our device!\n");
         Serial.printf("Processing UDP command: %s\n", command.c_str());
         
@@ -700,8 +715,9 @@ void handleUDPCommands() {
           uint8_t r = doc["r"];
           uint8_t g = doc["g"];
           uint8_t b = doc["b"];
-          Serial.printf("LED color command: RGB(%d, %d, %d)\n", r, g, b);
-          setLEDColor(r, g, b);
+          uint8_t w = doc.containsKey("w") ? (uint8_t)doc["w"] : 0;  // Support optional white channel
+          Serial.printf("LED color command: RGBW(%d, %d, %d, %d)\n", r, g, b, w);
+          setLEDColor(r, g, b, w);
           indicateActivity();
         }
         else if (command == "led_pattern") {
@@ -709,6 +725,40 @@ void handleUDPCommands() {
           Serial.printf("LED pattern command: %s\n", pattern.c_str());
           setLEDPattern(pattern);
           indicateActivity();
+        }
+        else if (command == "set_sacn_universe") {
+          int universe = 1;
+          if (doc.containsKey("parameters") && doc["parameters"].containsKey("universe")) {
+            universe = doc["parameters"]["universe"];
+          } else if (doc.containsKey("universe")) {
+            universe = doc["universe"];
+          }
+          sacnUniverse = universe;
+          propConfig.setSACNUniverse(universe);
+          
+          // Restart sACN with new universe
+          if (sacnEnabled) {
+            sacnUdp.stop();
+            initializeSACN();
+          }
+          Serial.printf("sACN universe set to %d\n", universe);
+          if (commandId.length() > 0) {
+            sendResponse(commandId, "sACN universe set to " + String(universe));
+          }
+        }
+        else if (command == "set_sacn_address") {
+          int address = 1;
+          if (doc.containsKey("parameters") && doc["parameters"].containsKey("address")) {
+            address = doc["parameters"]["address"];
+          } else if (doc.containsKey("address")) {
+            address = doc["address"];
+          }
+          sacnStartAddress = address;
+          propConfig.setDMXStartAddress(address);
+          Serial.printf("sACN start address set to %d\n", address);
+          if (commandId.length() > 0) {
+            sendResponse(commandId, "sACN start address set to " + String(address));
+          }
         }
         else if (command == "status") {
           Serial.println("Status request received");
@@ -734,26 +784,6 @@ void handleUDPCommands() {
               sendResponse(commandId, "OTA update failed: No firmware URL provided");
             }
           }
-        }
-        else if (command == "set_sacn_universe") {
-          int universe = doc["universe"];
-          Serial.printf("Setting SACN universe to: %d\n", universe);
-          propConfig.setSACNUniverse(universe);
-          Serial.printf("✅ SACN universe updated to %d\n", universe);
-          if (commandId.length() > 0) {
-            sendResponse(commandId, "SACN universe updated");
-          }
-          indicateActivity();
-        }
-        else if (command == "set_sacn_address") {
-          int address = doc["address"];
-          Serial.printf("Setting SACN DMX address to: %d\n", address);
-          propConfig.setDMXStartAddress(address);
-          Serial.printf("✅ SACN DMX address updated to %d\n", address);
-          if (commandId.length() > 0) {
-            sendResponse(commandId, "SACN DMX address updated");
-          }
-          indicateActivity();
         }
         else {
           Serial.printf("⚠️  Unknown command: %s\n", command.c_str());
@@ -871,34 +901,28 @@ void processSACNPacket(uint8_t* buffer, size_t length) {
 }
 
 void setLEDFromSACN() {
-  if (!sacnActive || sacnStartAddress < 1 || sacnStartAddress > 457) {  // 512 - 54 channels = 458 max start
+  if (!sacnActive || sacnStartAddress < 1 || sacnStartAddress > 508) {
     return;
   }
   
-  Serial.println("=== setLEDFromSACN: Processing 18 RGB pixels ===");
+  // Single RGBW LED uses 4 channels: R, G, B, W
+  uint8_t r = lastSacnData[sacnStartAddress - 1];     // DMX is 1-based, array is 0-based
+  uint8_t g = lastSacnData[sacnStartAddress];
+  uint8_t b = lastSacnData[sacnStartAddress + 1];
+  uint8_t w = lastSacnData[sacnStartAddress + 2];
   
-  // Update all 18 LEDs from sACN data
-  for (int i = 0; i < NUM_LEDS; i++) {
-    // Each LED uses 3 channels: R, G, B
-    int channelOffset = (i * 3);
-    uint8_t r = lastSacnData[sacnStartAddress - 1 + channelOffset];     // DMX is 1-based, array is 0-based
-    uint8_t g = lastSacnData[sacnStartAddress - 1 + channelOffset + 1];
-    uint8_t b = lastSacnData[sacnStartAddress - 1 + channelOffset + 2];
-    
-    // Set the pixel color
-    strip.setPixelColor(i, strip.Color(r, g, b));
-    
-    // Store current values for first LED for status reporting
-    if (i == 0) {
-      currentR = r;
-      currentG = g;
-      currentB = b;
-    }
-  }
+  Serial.printf("=== setLEDFromSACN: RGBW(%d, %d, %d, %d) ===\n", r, g, b, w);
   
-  // Update the entire strip
+  // Direct LED update from sACN - bypass priority check
+  currentR = r;
+  currentG = g;
+  currentB = b;
+  currentW = w;
+  
+  Serial.printf("sACN setting LED to RGBW(%d, %d, %d, %d)...\n", r, g, b, w);
+  strip.setPixelColor(0, strip.Color(r, g, b, w));
   strip.show();
-  Serial.printf("✅ sACN updated 18 LEDs starting from channel %d\n", sacnStartAddress);
+  Serial.println("✅ sACN LED update complete!");
   
   lastActivity = millis();
   
@@ -910,8 +934,8 @@ void setLEDFromSACN() {
   }
 }
 
-void setLEDColor(uint8_t r, uint8_t g, uint8_t b) {
-  Serial.printf("=== setLEDColor called: RGB(%d, %d, %d) for 18 LEDs ===\n", r, g, b);
+void setLEDColor(uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
+  Serial.printf("=== setLEDColor called: RGBW(%d, %d, %d, %d) ===\n", r, g, b, w);
   Serial.printf("sACN Priority: %s, sACN Active: %s\n", 
                 sacnPriority ? "TRUE" : "FALSE", 
                 sacnActive ? "TRUE" : "FALSE");
@@ -925,15 +949,12 @@ void setLEDColor(uint8_t r, uint8_t g, uint8_t b) {
   currentR = r;
   currentG = g;
   currentB = b;
+  currentW = w;
   
-  Serial.printf("Setting all 18 LEDs to RGB(%d, %d, %d)...\n", r, g, b);
-  
-  // Set all 18 LEDs to the same color
-  for (int i = 0; i < NUM_LEDS; i++) {
-    strip.setPixelColor(i, strip.Color(r, g, b));
-  }
+  Serial.printf("Setting LED to RGBW(%d, %d, %d, %d)...\n", r, g, b, w);
+  strip.setPixelColor(0, strip.Color(r, g, b, w));
   strip.show();
-  Serial.println("✅ All 18 LEDs updated!");
+  Serial.println("✅ LED update complete!");
   
   lastActivity = millis();
 }
@@ -969,14 +990,10 @@ void setLEDPattern(String pattern) {
 
 void indicateActivity() {
   // Brief flash to indicate command received
-  for (int i = 0; i < NUM_LEDS; i++) {
-    strip.setPixelColor(i, strip.Color(255, 255, 255));  // White flash
-  }
+  strip.setPixelColor(0, strip.Color(255, 255, 255));  // White flash
   strip.show();
   delay(50);
-  for (int i = 0; i < NUM_LEDS; i++) {
-    strip.setPixelColor(i, strip.Color(currentR, currentG, currentB));  // Back to current color
-  }
+  strip.setPixelColor(0, strip.Color(currentR, currentG, currentB));  // Back to current color
   strip.show();
 }
 
@@ -988,9 +1005,8 @@ void sendPeriodicStatus() {
   doc["ip_address"] = WiFi.localIP().toString();
   doc["online"] = true;
   doc["active"] = deviceActive;
-  doc["led_color"] = String(currentR) + "," + String(currentG) + "," + String(currentB);
+  doc["led_color"] = String(currentR) + "," + String(currentG) + "," + String(currentB) + "," + String(currentW);
   doc["brightness"] = ledBrightness;
-  doc["num_leds"] = NUM_LEDS;  // Report correct number of LEDs (18)
   doc["sacn_universe"] = sacnUniverse;
   doc["dmx_address"] = sacnStartAddress;
   doc["sacn_active"] = sacnActive;

@@ -36,6 +36,14 @@ app = Flask(__name__, static_folder='../web/dist', static_url_path='/static')
 app.config['SECRET_KEY'] = 'tricorder_control_secret'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# Enable CORS for all routes
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
 # Configuration
 CONFIG = {
     "udp_port": 8888,
@@ -49,22 +57,34 @@ CONFIG = {
 
 # Global state
 devices: Dict[str, Dict] = {}
+discovery_devices: Dict[str, Dict] = {}  # Track devices that only send discovery requests
 
 # Helper functions for device management with composite keys
 def find_device_by_id(device_id: str):
     """Find a device by device_id, returning the first match (for backward compatibility)"""
+    # First check main devices
     for device_key, device in devices.items():
+        if device.get('device_id') == device_id:
+            return device
+    # Then check discovery devices
+    for device_key, device in discovery_devices.items():
         if device.get('device_id') == device_id:
             return device
     return None
 
 def find_all_devices_by_id(device_id: str):
-    """Find all devices with the same device_id (multiple IPs)"""
-    return [device for device in devices.values() if device.get('device_id') == device_id]
+    """Find all devices with the same device_id (multiple IPs) including discovery devices"""
+    main_devices = [device for device in devices.values() if device.get('device_id') == device_id]
+    discovery_devs = [device for device in discovery_devices.values() if device.get('device_id') == device_id]
+    return main_devices + discovery_devs
 
 def get_device_by_key(device_key: str):
     """Get a device by its composite key (device_id@ip_address)"""
-    return devices.get(device_key)
+    # Check main devices first
+    if device_key in devices:
+        return devices[device_key]
+    # Then check discovery devices
+    return discovery_devices.get(device_key)
 
 def get_device_key(device_id: str, ip_address: str):
     """Generate a device key from device_id and IP address"""
@@ -93,6 +113,18 @@ def auto_configure_tricorder_for_sacn(device_id: str, device_info: dict):
 
 def auto_configure_polyinoculator_for_sacn(device_id: str, device_info: dict):
     """Placeholder for sACN configuration - disabled"""  
+    print(f"📡 sACN auto-configuration disabled for {device_id}")
+
+def auto_configure_hand_scanner_for_sacn(device_id: str, device_info: dict):
+    """Placeholder for sACN configuration - disabled"""
+    print(f"📡 sACN auto-configuration disabled for {device_id}")
+
+def auto_configure_ostoregenerator_for_sacn(device_id: str, device_info: dict):
+    """Placeholder for sACN configuration - disabled"""
+    print(f"📡 sACN auto-configuration disabled for {device_id}")
+
+def auto_configure_pin_stand_for_sacn(device_id: str, device_info: dict):
+    """Placeholder for sACN configuration - disabled"""
     print(f"📡 sACN auto-configuration disabled for {device_id}")
 
 class TricorderServer:
@@ -205,6 +237,54 @@ class TricorderServer:
             # Handle server discovery requests
             if data.get('action') == 'server_discovery':
                 print(f"🔍 Server discovery request from {addr[0]}")
+                
+                # Register discovery-only device
+                device_id = data.get('deviceId', f'UNKNOWN_{addr[0]}')
+                device_key = f"{device_id}@{addr[0]}"
+                
+                # Determine device type from device ID
+                device_type = None
+                if device_id.startswith('TRICORDER_') or device_id.startswith('TRIC'):
+                    device_type = 'tricorder'
+                elif device_id.startswith('POLYINOCULATOR_') or device_id.startswith('POLY'):
+                    device_type = 'polyinoculator'
+                elif device_id.startswith('SCAN'):
+                    device_type = 'hand_scanner'
+                elif device_id.startswith('OSTEO'):
+                    device_type = 'ostoregenerator'
+                elif device_id.startswith('IVST'):
+                    device_type = 'iv_station'
+                elif device_id.startswith('IV'):
+                    device_type = 'iv_injector'
+                elif device_id.startswith('PIN'):
+                    device_type = 'pin_stand'
+                else:
+                    device_type = 'unknown'
+                
+                # Only register if not already in main devices registry
+                if device_key not in devices:
+                    discovery_devices[device_key] = {
+                        'device_id': device_id,
+                        'device_key': device_key,
+                        'device_type': device_type,
+                        'device_label': f"{device_type.replace('_', ' ').title()}-{device_id.split('_')[-1] if '_' in device_id else device_id[4:] if len(device_id) > 4 else device_id}",
+                        'ip_address': addr[0],
+                        'port': addr[1],
+                        'last_seen': datetime.now().isoformat(),
+                        'status': 'discovery_only',
+                        'firmware_version': 'Unknown (Discovery Only)',
+                        'online': False,  # Mark as offline since we only have discovery
+                        'discovery_only': True
+                    }
+                    print(f"📡 Registered discovery-only device: {device_id} at {addr[0]}")
+                    
+                    # Emit update for discovery device
+                    socketio.emit('device_update', discovery_devices[device_key])
+                else:
+                    # Update last seen for existing discovery device
+                    if device_key in discovery_devices:
+                        discovery_devices[device_key]['last_seen'] = datetime.now().isoformat()
+                
                 self.send_discovery_response(addr)
                 return
             
@@ -215,8 +295,18 @@ class TricorderServer:
             # First check if device explicitly provides its type
             device_type = data.get('type')
             
-            # If no explicit type, use device ID pattern matching for legacy compatibility
-            if not device_type:
+            # Override device type based on device ID pattern for specific devices
+            # This handles cases where firmware sends wrong device type but has correct device ID
+            if device_id.startswith('SCAN'):  # Hand Scanner devices
+                device_type = 'hand_scanner'
+            elif device_id.startswith('OSTEO'):  # Ostoregenerator devices
+                device_type = 'ostoregenerator'
+            elif device_id.startswith('PIN'):  # Pin Stand devices  
+                device_type = 'pin_stand'
+            elif device_id.startswith('IVST'):  # IV Station devices
+                device_type = 'iv_station'
+            # If no explicit type or override, use device ID pattern matching for legacy compatibility
+            elif not device_type:
                 if device_id.startswith('TRICORDER_') or device_id.startswith('TRIC'):
                     device_type = 'tricorder'
                 elif device_id.startswith('POLYINOCULATOR_') or device_id.startswith('POLY'):
@@ -225,8 +315,6 @@ class TricorderServer:
                     device_type = 'defragmentor'
                 elif device_id.startswith('IV_INJECTOR_') or device_id.startswith('INJECTOR'):
                     device_type = 'iv_injector'
-                elif device_id.startswith('IVST'):  # New IV Station devices
-                    device_type = 'iv_station'
                 elif device_id.startswith('IV') and not device_id.startswith('IV_'):
                     device_type = 'iv_injector'  # Legacy IV devices
                 elif device_id.startswith('IV_BLOOD_BAG_') or device_id.startswith('BLOOD_BAG'):
@@ -308,9 +396,16 @@ class TricorderServer:
                     'sacn_enabled': data.get('sacnEnabled', True),
                     'sacn_universe': data.get('sacnUniverse', 1),
                 })
-            elif device_type in ['iv_injector', 'iv_blood_bag_station', 'polyinoculator_cradle']:
+            elif device_type in ['iv_injector', 'iv_blood_bag_station', 'polyinoculator_cradle', 'ostoregenerator', 'pin_stand']:
                 devices[device_key].update({
                     'num_leds': data.get('numLeds', 1),  # Single LED devices
+                    'brightness': data.get('brightness', 128),
+                    'sacn_enabled': data.get('sacnEnabled', True),
+                    'sacn_universe': data.get('sacnUniverse', 1),
+                })
+            elif device_type == 'hand_scanner':
+                devices[device_key].update({
+                    'num_leds': data.get('numLeds', 18),  # Hand scanners have 18 RGB pixels
                     'brightness': data.get('brightness', 128),
                     'sacn_enabled': data.get('sacnEnabled', True),
                     'sacn_universe': data.get('sacnUniverse', 1),
@@ -328,6 +423,12 @@ class TricorderServer:
                     auto_configure_tricorder_for_sacn(device_id, device_obj)  # Use same config as tricorder
                 elif device_type == 'polyinoculator':
                     auto_configure_polyinoculator_for_sacn(device_id, device_obj)
+                elif device_type == 'hand_scanner':
+                    auto_configure_hand_scanner_for_sacn(device_id, device_obj)
+                elif device_type == 'ostoregenerator':
+                    auto_configure_ostoregenerator_for_sacn(device_id, device_obj)
+                elif device_type == 'pin_stand':
+                    auto_configure_pin_stand_for_sacn(device_id, device_obj)
                 device_obj['sacn_configured'] = True
                 print(f"✅ {device_id} sACN configuration complete")
             else:
@@ -353,13 +454,15 @@ class TricorderServer:
 server = TricorderServer()
 
 def cleanup_offline_devices():
-    """Remove devices that haven't been seen within the timeout period"""
-    global devices
+    """Mark devices as offline that haven't been seen within the timeout period"""
+    global devices, discovery_devices
     current_time = datetime.now()
     timeout_seconds = CONFIG['device_timeout']
     
     offline_devices = []
+    offline_discovery_devices = []
     
+    # Check main devices
     for device_id, device_info in list(devices.items()):
         try:
             last_seen_str = device_info.get('last_seen')
@@ -377,35 +480,71 @@ def cleanup_offline_devices():
             time_diff = (current_time_local - last_seen).total_seconds()
             
             if time_diff > timeout_seconds:
-                offline_devices.append(device_id)
+                # Mark as offline but keep in registry
+                if device_info.get('status') != 'offline':
+                    device_info['status'] = 'offline'
+                    device_info['online'] = False
+                    offline_devices.append(device_id)
+                    print(f"🔌 Marked device offline: {device_id} (last seen: {device_info.get('last_seen', 'unknown')})")
+                    
+                    # Notify web clients of status change
+                    socketio.emit('device_update', device_info)
                 
         except (ValueError, TypeError) as e:
             print(f"⚠️ Error parsing last_seen for {device_id}: {e}")
-            # If we can't parse the timestamp, consider it old and remove it
-            offline_devices.append(device_id)
+            # If we can't parse the timestamp, mark as offline
+            device_info = devices.get(device_id, {})
+            if device_info.get('status') != 'offline':
+                device_info['status'] = 'offline'
+                device_info['online'] = False
+                offline_devices.append(device_id)
+                socketio.emit('device_update', device_info)
     
-    # Remove offline devices
-    for device_id in offline_devices:
-        device_info = devices.pop(device_id, {})
-        print(f"🔌 Removed offline device: {device_id} (last seen: {device_info.get('last_seen', 'unknown')})")
-        
-        # Remove from sACN receiver if configured
-        if SACN_AVAILABLE:
-            sacn_receiver = get_sacn_receiver()
-            if sacn_receiver:
-                sacn_receiver.remove_device(device_id)
-        
-        # Notify web clients
-        socketio.emit('device_removed', {
-            'device_id': device_id,
-            'reason': 'timeout',
-            'last_seen': device_info.get('last_seen')
-        })
+    # Check discovery-only devices (longer timeout since they only send discovery)
+    discovery_timeout = timeout_seconds * 3  # 3x longer timeout for discovery devices
+    for device_id, device_info in list(discovery_devices.items()):
+        try:
+            last_seen_str = device_info.get('last_seen')
+            if not last_seen_str:
+                continue
+                
+            last_seen = datetime.fromisoformat(last_seen_str.replace('Z', '+00:00'))
+            # Handle timezone-naive datetime by assuming local timezone
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=None)
+                current_time_local = current_time.replace(tzinfo=None)
+            else:
+                current_time_local = current_time
+            
+            time_diff = (current_time_local - last_seen).total_seconds()
+            
+            if time_diff > discovery_timeout:
+                # Mark as offline but keep in registry
+                if device_info.get('status') != 'offline':
+                    device_info['status'] = 'offline'
+                    device_info['online'] = False
+                    offline_discovery_devices.append(device_id)
+                    print(f"🔌 Marked discovery device offline: {device_id} (last seen: {device_info.get('last_seen', 'unknown')})")
+                    
+                    # Notify web clients of status change
+                    socketio.emit('device_update', device_info)
+                
+        except (ValueError, TypeError) as e:
+            print(f"⚠️ Error parsing last_seen for discovery device {device_id}: {e}")
+            # If we can't parse the timestamp, mark as offline
+            device_info = discovery_devices.get(device_id, {})
+            if device_info.get('status') != 'offline':
+                device_info['status'] = 'offline'
+                device_info['online'] = False
+                offline_discovery_devices.append(device_id)
+                socketio.emit('device_update', device_info)
     
-    if offline_devices:
-        print(f"🧹 Cleanup completed: removed {len(offline_devices)} offline devices")
-        # Emit updated device list
-        socketio.emit('devices_update', list(devices.values()))
+    if offline_devices or offline_discovery_devices:
+        total_offline = len(offline_devices) + len(offline_discovery_devices)
+        print(f"🧹 Cleanup completed: marked {total_offline} devices as offline ({len(offline_devices)} main devices, {len(offline_discovery_devices)} discovery devices)")
+        # Emit updated device list including discovery devices
+        all_devices = list(devices.values()) + list(discovery_devices.values())
+        socketio.emit('devices_update', all_devices)
 
 def device_cleanup_task():
     """Background task to periodically clean up offline devices"""
@@ -419,19 +558,31 @@ def device_cleanup_task():
 
 # Prop-type grouping helper functions
 def get_devices_by_type(prop_type: str) -> List[Dict]:
-    """Get all devices of a specific type"""
-    return [device for device in devices.values() if device.get('device_type') == prop_type]
+    """Get all devices of a specific type including discovery devices"""
+    main_devices = [device for device in devices.values() if device.get('device_type') == prop_type]
+    discovery_devs = [device for device in discovery_devices.values() if device.get('device_type') == prop_type]
+    return main_devices + discovery_devs
 
 def get_online_devices_by_type(prop_type: str) -> List[Dict]:
-    """Get all online devices of a specific type"""
+    """Get all online devices of a specific type (discovery devices are not considered online)"""
     return [device for device in devices.values() 
             if device.get('device_type') == prop_type and device.get('status') == 'online']
 
 def send_udp_command_to_device(device_id: str, action: str, parameters: dict, command_id: str):
     """Send UDP command to a specific device"""
-    device = devices.get(device_id)
+    # Look for device in both main devices and discovery devices
+    device = devices.get(device_id) or discovery_devices.get(device_id)
+    if not device:
+        # Try finding by device_id instead of device_key
+        device = find_device_by_id(device_id)
+    
     if not device:
         print(f"❌ Device {device_id} not found")
+        return False
+    
+    # Don't send commands to discovery-only devices
+    if device.get('discovery_only', False):
+        print(f"⚠️ Cannot send commands to discovery-only device: {device_id}")
         return False
     
     try:
@@ -604,12 +755,15 @@ def basic_interface():
 
 @app.route('/api/devices')
 def get_devices():
-    """Get all connected devices"""
+    """Get all connected devices including discovery-only devices"""
+    all_devices = list(devices.values()) + list(discovery_devices.values())
     return jsonify({
-        'devices': devices,  # Return as dictionary with device_id as keys
-        'device_list': list(devices.values()),  # Also provide as list for compatibility
-        'total_devices': len(devices),
-        'online_devices': len([d for d in devices.values() if d.get('status') == 'online']),
+        'devices': devices,  # Main devices dictionary with device_id as keys
+        'discovery_devices': discovery_devices,  # Discovery-only devices dictionary 
+        'device_list': all_devices,  # Combined list for compatibility
+        'total_devices': len(all_devices),
+        'online_devices': len([d for d in all_devices if d.get('status') == 'online']),
+        'discovery_only_devices': len([d for d in all_devices if d.get('discovery_only', False)]),
         'last_updated': datetime.now().isoformat()
     })
 
@@ -924,10 +1078,9 @@ def send_device_command(device_id):
 def get_device_battery(device_id):
     """Get battery status for a specific device"""
     try:
-        if device_id not in devices:
+        device = find_device_by_id(device_id)
+        if not device:
             return jsonify({'error': 'Device not found'}), 404
-        
-        device = devices[device_id]
         
         # Send battery command to device
         command_id = str(uuid.uuid4())
@@ -976,10 +1129,9 @@ def get_device_battery(device_id):
 def get_device_config(device_id):
     """Get device configuration"""
     try:
-        if device_id not in devices:
+        device = find_device_by_id(device_id)
+        if not device:
             return jsonify({'error': f'Device {device_id} not found'}), 404
-        
-        device = devices[device_id]
         ip_address = device['ip_address']
         
         # Send HTTP request to device's /api/config endpoint
@@ -1006,10 +1158,9 @@ def get_device_config(device_id):
 def set_device_config(device_id):
     """Update device configuration"""
     try:
-        if device_id not in devices:
+        device = find_device_by_id(device_id)
+        if not device:
             return jsonify({'error': f'Device {device_id} not found'}), 404
-        
-        device = devices[device_id]
         ip_address = device['ip_address']
         
         # Get configuration data from request
@@ -1017,10 +1168,35 @@ def set_device_config(device_id):
         if not config_data:
             return jsonify({'error': 'No configuration data provided'}), 400
         
-        # Send HTTP POST request to device's /api/config endpoint
+        # First, get the current device configuration
+        current_config = {}
+        try:
+            get_response = requests.get(f"http://{ip_address}/config", timeout=5)
+            if get_response.status_code == 200:
+                current_config = get_response.json()
+        except:
+            # If we can't get current config, use defaults for required fields
+            current_config = {
+                'deviceLabel': 'IV_INJECTOR_001',
+                'sacnUniverse': 1,
+                'dmxStartAddress': 1,
+                'brightness': 128
+            }
+        
+        # Convert server field names to device field names and merge with current config
+        device_config = current_config.copy()
+        if 'dmx_address' in config_data:
+            device_config['dmxStartAddress'] = config_data['dmx_address']
+        if 'sacn_universe' in config_data:
+            device_config['sacnUniverse'] = config_data['sacn_universe']
+        if 'brightness' in config_data:
+            device_config['brightness'] = config_data['brightness']
+        if 'device_label' in config_data:
+            device_config['deviceLabel'] = config_data['device_label']
+        
         response = requests.post(
-            f"http://{ip_address}/api/config", 
-            json=config_data,
+            f"http://{ip_address}/config", 
+            json=device_config,
             headers={'Content-Type': 'application/json'},
             timeout=10
         )
@@ -1063,10 +1239,9 @@ def set_device_config(device_id):
 def set_device_network_config(device_id):
     """Update device network configuration"""
     try:
-        if device_id not in devices:
+        device = find_device_by_id(device_id)
+        if not device:
             return jsonify({'error': f'Device {device_id} not found'}), 404
-        
-        device = devices[device_id]
         ip_address = device['ip_address']
         
         # Get network configuration data from request
@@ -1106,10 +1281,9 @@ def set_device_network_config(device_id):
 def factory_reset_device(device_id):
     """Factory reset device configuration"""
     try:
-        if device_id not in devices:
+        device = find_device_by_id(device_id)
+        if not device:
             return jsonify({'error': f'Device {device_id} not found'}), 404
-        
-        device = devices[device_id]
         ip_address = device['ip_address']
         
         # Send HTTP POST request to device's /api/factory-reset endpoint
@@ -1148,13 +1322,13 @@ def factory_reset_device(device_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config/<device_id>/restart', methods=['POST'])
+@app.route('/api/restart/<device_id>', methods=['POST'])
 def restart_device(device_id):
     """Restart device"""
     try:
-        if device_id not in devices:
+        device = find_device_by_id(device_id)
+        if not device:
             return jsonify({'error': f'Device {device_id} not found'}), 404
-        
-        device = devices[device_id]
         ip_address = device['ip_address']
         
         # Send HTTP POST request to device's /api/restart endpoint
@@ -1191,22 +1365,28 @@ def restart_device(device_id):
 
 @app.route('/api/props', methods=['GET'])
 def get_prop_types():
-    """Get summary of all prop types with device counts"""
+    """Get summary of all prop types with device counts including discovery devices"""
     prop_types = {}
     
-    for device in devices.values():
+    # Include both main devices and discovery devices
+    all_devices = list(devices.values()) + list(discovery_devices.values())
+    
+    for device in all_devices:
         device_type = device.get('device_type', 'unknown')
         if device_type not in prop_types:
             prop_types[device_type] = {
                 'type': device_type,
                 'total_devices': 0,
                 'online_devices': 0,
+                'discovery_only_devices': 0,
                 'devices': []
             }
         
         prop_types[device_type]['total_devices'] += 1
         if device.get('status') == 'online':
             prop_types[device_type]['online_devices'] += 1
+        if device.get('discovery_only', False):
+            prop_types[device_type]['discovery_only_devices'] += 1
         prop_types[device_type]['devices'].append(device)
     
     return jsonify({
@@ -1287,11 +1467,12 @@ def set_prop_type_device_labels(prop_type):
         
         # Get all online devices of the specified type
         prop_devices = []
-        for device_id, device in devices.items():
+        for device_key, device in devices.items():
             if device.get('device_type', '').lower().replace('_', '').replace('-', '') == prop_type.lower().replace('_', '').replace('-', ''):
                 if device.get('status') == 'online':
                     prop_devices.append({
-                        'device_id': device_id,
+                        'device_id': device.get('device_id'),  # The actual device ID (e.g. "IV37D4")
+                        'device_key': device_key,  # The full key (e.g. "IV37D4@192.168.0.187")
                         'ip_address': device['ip_address']
                     })
         
@@ -1303,6 +1484,7 @@ def set_prop_type_device_labels(prop_type):
         
         for i, prop_device in enumerate(prop_devices):
             device_id = prop_device['device_id']
+            device_key = prop_device['device_key']
             ip_address = prop_device['ip_address']
             
             try:
@@ -1334,8 +1516,8 @@ def set_prop_type_device_labels(prop_type):
                     })
                     
                     # Update local device info
-                    if device_id in devices:
-                        devices[device_id]['device_label'] = new_label
+                    if device_key in devices:
+                        devices[device_key]['device_label'] = new_label
                         
                     # Broadcast update to web clients
                     socketio.emit('device_updated', {
@@ -1382,10 +1564,12 @@ def set_prop_type_device_labels(prop_type):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/device/<device_id>/label', methods=['POST'])
+@app.route('/api/device/<device_id>/label', methods=['POST'])
 def set_device_label(device_id):
     """Set device label for a specific device"""
     try:
-        if device_id not in devices:
+        device = find_device_by_id(device_id)
+        if not device:
             return jsonify({'error': f'Device {device_id} not found'}), 404
         
         data = request.get_json()
@@ -1405,8 +1589,10 @@ def set_device_label(device_id):
         )
         
         if response.status_code == 200:
-            # Update local device info
-            devices[device_id]['device_label'] = new_label
+            # Update local device info - find the correct device key
+            device_key = device.get('device_key')
+            if device_key and device_key in devices:
+                devices[device_key]['device_label'] = new_label
             
             # Broadcast update to web clients
             socketio.emit('device_updated', {

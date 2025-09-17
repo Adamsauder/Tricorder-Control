@@ -41,7 +41,7 @@ bool PropConfig::loadConfig(Config& config) {
     // Load configuration with defaults for IV Injector
     config.deviceLabel = prefs.getString(KEY_DEVICE_LABEL, "IV_INJECTOR_001");
     config.sacnUniverse = prefs.getInt(KEY_SACN_UNIVERSE, 1);
-    config.dmxStartAddress = prefs.getInt(KEY_DMX_START_ADDR, 211);
+    config.dmxStartAddress = prefs.getInt(KEY_DMX_START_ADDR, 1);
     config.deviceType = prefs.getString(KEY_DEVICE_TYPE, "iv_injector");
     config.numLeds = prefs.getInt(KEY_NUM_LEDS, 1);  // Single LED for IV Injector
     config.brightness = prefs.getInt(KEY_BRIGHTNESS, 128);
@@ -91,7 +91,7 @@ bool PropConfig::resetToDefaults() {
     Config defaultConfig;
     defaultConfig.deviceLabel = "IV_INJECTOR_001";
     defaultConfig.sacnUniverse = 1;
-    defaultConfig.dmxStartAddress = 211;
+    defaultConfig.dmxStartAddress = 1;
     defaultConfig.deviceType = "iv_injector";
     defaultConfig.numLeds = 1;  // Single LED
     defaultConfig.brightness = 128;

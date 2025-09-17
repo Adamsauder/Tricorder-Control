@@ -45,8 +45,8 @@ PropConfig::Config config;
 
 // Device configuration variables - loaded from persistent storage
 String deviceId;  // Will be generated uniquely from MAC address
-String deviceLabel = "IV Injector 001";
-String deviceType = "iv_injector";
+String deviceLabel = "Ostoregenerator 001";
+String deviceType = "ostoregenerator";
 String firmwareVersion = "Ostoregenerator v1.0";
 int sacnUniverse = 1;
 int sacnStartAddress = 1;

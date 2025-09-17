@@ -61,6 +61,7 @@ interface Device {
   num_leds?: number;
   uptime?: number;
   wifi_connected?: boolean;
+  discovery_only?: boolean;
   // Network configuration
   useDHCP?: boolean;
   staticIP?: string;
@@ -100,14 +101,17 @@ const DeviceTableView: React.FC = () => {
       
       const data = await response.json();
       
+      console.log('DeviceTableView received data:', data);
+      
       // Handle both old format (list) and new format (object with devices)
       let deviceList: Device[];
       if (Array.isArray(data)) {
         deviceList = data;
+      } else if (data.device_list) {
+        // Prefer device_list as it includes discovery devices
+        deviceList = data.device_list;
       } else if (data.devices) {
         deviceList = Object.values(data.devices) as Device[];
-      } else if (data.device_list) {
-        deviceList = data.device_list;
       } else {
         throw new Error('Unexpected data format from server');
       }
@@ -119,6 +123,9 @@ const DeviceTableView: React.FC = () => {
         }
         return a.device_id.localeCompare(b.device_id);
       });
+      
+      console.log('DeviceTableView processed devices:', deviceList);
+      console.log('Discovery devices:', deviceList.filter(d => d.discovery_only));
       
       setDevices(deviceList);
       setFilteredDevices(deviceList);
@@ -362,8 +369,12 @@ const DeviceTableView: React.FC = () => {
       polyinoculator: 'secondary',
       defragmentor: 'success',
       iv_injector: 'warning',
+      iv_station: 'primary',
       iv_blood_bag_station: 'error',
       polyinoculator_cradle: 'info',
+      hand_scanner: 'info',
+      ostoregenerator: 'success',
+      pin_stand: 'secondary',
     };
     return colors[deviceType] || 'default';
   };
@@ -593,12 +604,14 @@ const DeviceTableView: React.FC = () => {
                   <Box display="flex" alignItems="center" gap={1}>
                     {device.status === 'online' ? (
                       <WifiIcon color="success" fontSize="small" />
+                    ) : device.status === 'discovery_only' ? (
+                      <WifiIcon color="warning" fontSize="small" />
                     ) : (
                       <WifiOffIcon color="error" fontSize="small" />
                     )}
                     <Chip
-                      label={device.status}
-                      color={device.status === 'online' ? 'success' : 'error'}
+                      label={device.discovery_only ? 'Discovery Only' : device.status}
+                      color={device.status === 'online' ? 'success' : device.discovery_only ? 'warning' : 'error'}
                       size="small"
                       variant="outlined"
                     />
@@ -681,7 +694,6 @@ const DeviceTableView: React.FC = () => {
                     <IconButton
                       size="small"
                       onClick={() => window.open(`http://${device.ip_address}`, '_blank')}
-                      disabled={device.status !== 'online'}
                     >
                       <OpenInNewIcon fontSize="small" />
                     </IconButton>

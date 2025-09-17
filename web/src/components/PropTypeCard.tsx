@@ -86,8 +86,12 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
       case 'polyinoculator': return '💡';
       case 'defragmentor': return '🔧';
       case 'iv_injector': return '💉';
+      case 'iv_station': return '🏥';
       case 'iv_blood_bag_station': return '🩸';
       case 'polyinoculator_cradle': return '🔌';
+      case 'hand_scanner': return '🖐️';
+      case 'ostoregenerator': return '🦴';
+      case 'pin_stand': return '📍';
       default: return '🤖';
     }
   };
@@ -98,8 +102,12 @@ const PropTypeCard: React.FC<PropTypeCardProps> = ({
       case 'polyinoculator': return 'Polyinoculators';
       case 'defragmentor': return 'Defragmentors';
       case 'iv_injector': return 'IV Injectors';
+      case 'iv_station': return 'IV Stations';
       case 'iv_blood_bag_station': return 'IV Blood Bag Stations';
       case 'polyinoculator_cradle': return 'Polyinoculator Cradles';
+      case 'hand_scanner': return 'Hand Scanners';
+      case 'ostoregenerator': return 'Ostoregenerators';
+      case 'pin_stand': return 'Pin Stands';
       default: return type.charAt(0).toUpperCase() + type.slice(1);
     }
   };

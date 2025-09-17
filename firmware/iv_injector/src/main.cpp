@@ -47,9 +47,9 @@ PropConfig::Config config;
 String deviceId;  // Will be generated uniquely from MAC address
 String deviceLabel = "IV Injector 001";
 String deviceType = "iv_injector";
-String firmwareVersion = "IV Injector v1.4";
+String firmwareVersion = "IV Injector v1.6 SACN DMX211";
 int sacnUniverse = 1;
-int sacnStartAddress = 1;
+int sacnStartAddress = 211;  // Hardcoded to DMX address 211 for IV injectors
 int ledBrightness = 128;
 int fixtureNumber = 4;
 
@@ -389,7 +389,7 @@ void setupWebServer() {
             <input type="number" id="sacnUniverse" value="1" min="1" max="63999">
             
             <label>DMX Start Address:</label>
-            <input type="number" id="dmxAddress" value="1" min="1" max="512">
+            <input type="number" id="dmxAddress" value="211" min="1" max="512">
             
             <label>LED Brightness:</label>
             <input type="range" id="brightness" min="0" max="255" value="128" oninput="document.getElementById('brightnessValue').textContent=this.value">
@@ -446,7 +446,7 @@ void setupWebServer() {
         .then(config => {
             document.getElementById('deviceLabel').value = config.deviceLabel || 'IV_INJECTOR_001';
             document.getElementById('sacnUniverse').value = config.sacnUniverse || 1;
-            document.getElementById('dmxAddress').value = config.dmxStartAddress || 1;
+            document.getElementById('dmxAddress').value = config.dmxStartAddress || 211;
             document.getElementById('brightness').value = config.brightness || 128;
             document.getElementById('brightnessValue').textContent = config.brightness || 128;
         });
@@ -513,17 +513,38 @@ void setupWebServer() {
   
   server.on("/config", HTTP_GET, handleGetConfig);
   server.on("/config", HTTP_POST, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/plain", "Configuration updated");
+    // Response will be sent by body handler
   }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
     // Handle JSON body for configuration updates
-    if (index == 0) {
+    if (index == 0 && len == total) {  // Ensure we have the complete body
       JsonDocument doc;
       if (deserializeJson(doc, (char*)data) == DeserializationError::Ok) {
         // Convert JSON to string and pass to PropConfig
         String jsonStr;
         serializeJson(doc, jsonStr);
         
+        // Check if SACN configuration changed
+        bool sacnChanged = doc.containsKey("sacnUniverse") || doc.containsKey("dmxStartAddress");
+        
         if (propConfig.fromJSON(jsonStr)) {
+          // If SACN configuration changed, reload values and restart SACN
+          if (sacnChanged) {
+            // Reload SACN configuration from saved config
+            PropConfig::Config config;
+            propConfig.loadConfig(config);
+            sacnUniverse = config.sacnUniverse;
+            sacnStartAddress = config.dmxStartAddress;
+            ledBrightness = config.brightness;
+            
+            Serial.printf("SACN config updated: Universe %d, Address %d\n", sacnUniverse, sacnStartAddress);
+            
+            // Restart sACN with new configuration
+            if (sacnEnabled) {
+              sacnUdp.stop();
+              initializeSACN();
+            }
+          }
+          
           // Check if network configuration changed
           bool networkChanged = doc.containsKey("useDHCP") || 
                                doc.containsKey("staticIP") || 
@@ -539,9 +560,20 @@ void setupWebServer() {
           
           request->send(200, "text/plain", "Configuration updated successfully");
           return;
+        } else {
+          Serial.println("Failed to save configuration to NVS");
+          request->send(500, "text/plain", "Failed to save configuration");
+          return;
         }
+      } else {
+        Serial.println("JSON deserialization failed");
+        request->send(400, "text/plain", "Invalid JSON format");
+        return;
       }
-      request->send(400, "text/plain", "Invalid JSON or failed to save configuration");
+    } else {
+      Serial.println("Incomplete body received");
+      request->send(400, "text/plain", "Incomplete request body");
+      return;
     }
   });
   server.on("/factory-reset", HTTP_POST, handleFactoryReset);
@@ -703,6 +735,40 @@ void handleUDPCommands() {
           Serial.printf("LED pattern command: %s\n", pattern.c_str());
           setLEDPattern(pattern);
           indicateActivity();
+        }
+        else if (command == "set_sacn_universe") {
+          int universe = 1;
+          if (doc.containsKey("parameters") && doc["parameters"].containsKey("universe")) {
+            universe = doc["parameters"]["universe"];
+          } else if (doc.containsKey("universe")) {
+            universe = doc["universe"];
+          }
+          sacnUniverse = universe;
+          propConfig.setSACNUniverse(universe);
+          
+          // Restart sACN with new universe
+          if (sacnEnabled) {
+            sacnUdp.stop();
+            initializeSACN();
+          }
+          Serial.printf("sACN universe set to %d\n", universe);
+          if (commandId.length() > 0) {
+            sendResponse(commandId, "sACN universe set to " + String(universe));
+          }
+        }
+        else if (command == "set_sacn_address") {
+          int address = 1;
+          if (doc.containsKey("parameters") && doc["parameters"].containsKey("address")) {
+            address = doc["parameters"]["address"];
+          } else if (doc.containsKey("address")) {
+            address = doc["address"];
+          }
+          sacnStartAddress = address;
+          propConfig.setDMXStartAddress(address);
+          Serial.printf("sACN start address set to %d\n", address);
+          if (commandId.length() > 0) {
+            sendResponse(commandId, "sACN start address set to " + String(address));
+          }
         }
         else if (command == "status") {
           Serial.println("Status request received");

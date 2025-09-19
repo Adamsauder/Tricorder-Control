@@ -258,9 +258,7 @@
 			"args": [
 				"run",
 				"--target",
-				"upload",
-				"--upload-port",
-				"${input:comPort}"
+				"upload"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}/firmware/iv_injector"
@@ -286,6 +284,56 @@
 					"severity": 4,
 					"message": 5
 				}
+			}
+		},
+		{
+			"label": "Full Erase IV Injector Flash",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"erase"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/iv_injector"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/iv_injector"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Full Erase and Flash IV Injector",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Full Erase IV Injector Flash",
+				"Upload IV Injector Firmware"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
 			}
 		},
 		{
@@ -934,6 +982,206 @@
 					"message": 5
 				}
 			}
+		},
+		{
+			"label": "Compile Blood Slide Station Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/blood_slide_station"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/blood_slide_station"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload Blood Slide Station Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/blood_slide_station"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/blood_slide_station"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Build and Upload Blood Slide Station",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile Blood Slide Station Firmware",
+				"Upload Blood Slide Station Firmware"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Monitor Blood Slide Station Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/blood_slide_station"
+			},
+			"group": "test",
+			"isBackground": true,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Compile Blood Analyzer Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/blood_analyzer"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/blood_analyzer"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload Blood Analyzer Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/blood_analyzer"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/blood_analyzer"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Build and Upload Blood Analyzer",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile Blood Analyzer Firmware",
+				"Upload Blood Analyzer Firmware"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Monitor Blood Analyzer Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/blood_analyzer"
+			},
+			"group": "test",
+			"isBackground": true,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
 		}
 	]
 }

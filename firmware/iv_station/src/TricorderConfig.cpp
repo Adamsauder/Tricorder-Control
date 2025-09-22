@@ -66,7 +66,7 @@ void TricorderConfig::setDefaults() {
   
   // SACN/DMX settings
   config.sacnUniverse = 1;
-  config.dmxAddress = 1;
+  config.dmxAddress = 201;
   config.sacnEnabled = true;
   
   // LED settings

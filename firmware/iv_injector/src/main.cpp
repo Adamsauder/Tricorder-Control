@@ -1,6 +1,7 @@
 /*
  * IV Injector Firmware - sACN Compatible Single LED Device
  * ESP32-C3 XIAO based IV injector with single WS2812B LED control and web configuration
+ * Battery optimized version with power management
  */
 
 #include <Arduino.h>
@@ -13,6 +14,8 @@
 #include <Adafruit_NeoPixel.h>
 #include <Update.h>
 #include "PropConfig.h"
+#include "esp_pm.h"
+#include "esp_wifi.h"
 
 // Pin definitions for ESP32-C3 XIAO
 #define LED_PIN D3    // D3 (GPIO5) - Single WS2812B LED
@@ -22,7 +25,6 @@
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // Network settings
-#define UDP_PORT 8888      // Port for UDP status broadcasts (matches server)
 #define SACN_PORT 5568     // sACN E1.31 standard port
 #define SACN_MULTICAST_BASE "239.255.0.0"  // sACN multicast base address
 
@@ -47,10 +49,10 @@ PropConfig::Config config;
 String deviceId;  // Will be generated uniquely from MAC address
 String deviceLabel = "IV Injector 001";
 String deviceType = "iv_injector";
-String firmwareVersion = "IV Injector v1.6 SACN DMX211";
+String firmwareVersion = "IV Injector v1.8 Battery-Optimized SACN-Only DMX211";
 int sacnUniverse = 1;
 int sacnStartAddress = 211;  // Hardcoded to DMX address 211 for IV injectors
-int ledBrightness = 128;
+int ledBrightness = 255;     // Keep full brightness capability for sACN control
 int fixtureNumber = 4;
 
 // WiFi settings - loaded from configuration
@@ -58,13 +60,8 @@ String wifiSSID = "Rigging Electric";
 String wifiPassword = "academy123";
 
 // Network instances
-WiFiUDP udp;       // Main UDP socket for status broadcasts
-WiFiUDP sacnUdp;   // Separate UDP socket for sACN
+WiFiUDP sacnUdp;   // UDP socket for sACN only
 AsyncWebServer server(80);
-
-// Response tracking for command responses
-IPAddress currentSenderIP;
-uint16_t currentSenderPort;
 
 // sACN State Variables
 bool sacnEnabled = true;
@@ -78,8 +75,6 @@ bool sacnPriority = false;  // True when sACN should override UDP LED commands
 void loadConfiguration();
 void initializeWiFi();
 void setupWebServer();
-void sendPeriodicStatus();
-void handleUDPCommands();
 void handleSACNData();
 void initializeSACN();
 void processSACNPacket(uint8_t* buffer, size_t length);
@@ -91,7 +86,6 @@ void handleGetConfig(AsyncWebServerRequest *request);
 void handleFactoryReset(AsyncWebServerRequest *request);
 void handleOTAUpdate(AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final);
 void handleOTAUpdate(String firmwareUrl, String commandId);
-void sendResponse(String commandId, String result);
 
 // Generate unique device ID based on ESP32 MAC address
 String generateUniqueDeviceId() {
@@ -127,6 +121,15 @@ void setup() {
   Serial.println("IV Injector Control System Starting...");
   Serial.println("Hardware: ESP32-C3 XIAO with Single WS2812B LED");
   Serial.printf("Firmware: %s\n", firmwareVersion.c_str());
+  
+  // Battery optimization: Configure power management
+  esp_pm_config_esp32c3_t pm_config = {
+    .max_freq_mhz = 160,     // Maximum CPU frequency
+    .min_freq_mhz = 80,      // Minimum CPU frequency (50% reduction for power savings)
+    .light_sleep_enable = true // Enable automatic light sleep
+  };
+  esp_pm_configure(&pm_config);
+  Serial.println("Power management configured: 80-160MHz with auto light sleep");
   
   // Initialize configuration system first
   if (!propConfig.begin()) {
@@ -167,26 +170,34 @@ void setup() {
     }
   } else {
     Serial.println("No WiFi credentials configured - running in standalone mode");
+    // Set LED to 10% brightness when no WiFi credentials
+    Serial.println("No WiFi credentials - setting LED to 10% brightness");
+    uint8_t brightness10 = 25;  // 10% of 255 = ~25
+    setLEDColor(brightness10, brightness10, brightness10);  // 10% white
   }
   
   Serial.println("IV Injector initialization complete");
-  Serial.println("Ready for sACN and UDP commands");
-  
-  // Idle state - dim green
-  setLEDColor(0, 64, 0);  // Dim green for idle state
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Ready for sACN control only - UDP commands disabled for performance");
+    // Idle state - very dim green for battery savings
+    setLEDColor(0, 16, 0);  // Battery optimization: Reduced idle brightness from 64 to 16 (6% vs 25%)
+  } else {
+    Serial.println("No WiFi connection - LED set to 10% brightness");
+  }
   lastActivity = millis();
 }
 
 void loop() {
-  // Handle network communication
+  // Handle sACN data only - simplified for performance
   if (WiFi.status() == WL_CONNECTED) {
-    handleUDPCommands();
     handleSACNData();
-    
-    // Send periodic status broadcasts
-    if (millis() - lastStatusBroadcast > 5000) {
-      sendPeriodicStatus();
-      lastStatusBroadcast = millis();
+  } else {
+    // Battery optimization: Manual WiFi reconnection with longer intervals
+    static unsigned long lastReconnectAttempt = 0;
+    if (millis() - lastReconnectAttempt > 10000) {  // Try reconnect every 10 seconds instead of constant attempts
+      Serial.println("WiFi disconnected - attempting reconnect");
+      WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
+      lastReconnectAttempt = millis();
     }
   }
   
@@ -194,10 +205,18 @@ void loop() {
   if (deviceActive && (millis() - lastActivity > 30000)) {
     Serial.println("Auto-return to idle state");
     deviceActive = false;
-    setLEDColor(0, 64, 0);  // Dim green for idle
+    setLEDColor(0, 16, 0);  // Battery optimization: Very dim green for idle
   }
   
-  delay(10); // Small delay for stability
+  // Check for sACN timeout (no data for 2.5 seconds)
+  if (sacnActive && (millis() - lastSacnPacket > 2500)) {
+    sacnActive = false;
+    sacnPriority = false;
+    Serial.println("sACN timeout - holding last look");
+    // Keep LED at its last sACN state instead of returning to idle
+  }
+  
+  delay(1); // Minimal delay for stability
 }
 
 void loadConfiguration() {
@@ -250,6 +269,18 @@ void initializeWiFi() {
   
   WiFi.mode(WIFI_STA);
   
+  // Battery optimization: Set WiFi power saving mode
+  WiFi.setSleep(WIFI_PS_MIN_MODEM);  // Light sleep mode for power savings while maintaining responsiveness
+  
+  // WiFi power: Keep at maximum for reliable connectivity
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Maximum power for reliable connections on film sets
+  
+  // Battery optimization: Disable WiFi auto-reconnect to prevent unnecessary power drain
+  WiFi.setAutoReconnect(false);
+  
+  // Battery optimization: Enable power saving at driver level
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);  // Light sleep when possible
+  
   // Check if using static IP configuration
   if (!propConfig.getUseDHCP()) {
     IPAddress staticIP, gateway, subnet, dns;
@@ -298,12 +329,6 @@ void initializeWiFi() {
     if (MDNS.begin(hostname.c_str())) {
       Serial.printf("mDNS responder started: %s.local\n", hostname.c_str());
       MDNS.addService("http", "tcp", 80);
-      MDNS.addService("iv-injector", "udp", UDP_PORT);
-    }
-    
-    // Initialize UDP for status broadcasts
-    if (udp.begin(UDP_PORT)) {
-      Serial.printf("UDP listener started on port %d\n", UDP_PORT);
     }
     
     // Green flash for successful connection
@@ -677,140 +702,6 @@ void setupWebServer() {
   Serial.println("Web server started on port 80");
 }
 
-void handleUDPCommands() {
-  int packetSize = udp.parsePacket();
-  if (packetSize > 0) {
-    // Store sender info for responses
-    currentSenderIP = udp.remoteIP();
-    currentSenderPort = udp.remotePort();
-    
-    char buffer[1024];
-    int len = udp.read(buffer, sizeof(buffer) - 1);
-    buffer[len] = '\0';
-    
-    Serial.printf("=== UDP PACKET RECEIVED ===\n");
-    Serial.printf("Packet size: %d bytes\n", packetSize);
-    Serial.printf("Raw data: %s\n", buffer);
-    
-    // Parse JSON command
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, buffer);
-    if (error == DeserializationError::Ok) {
-      // Support both "command" (legacy) and "action" (new OTA format)
-      String command = doc["command"];
-      String action = doc["action"];
-      String commandId = doc["commandId"];
-      String target = doc["device_id"];
-      
-      // DEBUG: Show raw extracted values
-      Serial.printf("🔍 Raw extracted values:\n");
-      Serial.printf("   command: '%s' (length: %d)\n", command.c_str(), command.length());
-      Serial.printf("   action: '%s' (length: %d)\n", action.c_str(), action.length());
-      Serial.printf("   target: '%s'\n", target.c_str());
-      
-      // Use action if command is empty or null (new format)
-      if ((command.length() == 0 || command == "null") && action.length() > 0) {
-        Serial.printf("🔄 Using action '%s' as command\n", action.c_str());
-        command = action;
-      }
-      
-      Serial.printf("Parsed command/action: '%s', target: '%s'\n", command.c_str(), target.c_str());
-      Serial.printf("Our device ID: '%s'\n", deviceId.c_str());
-      
-      // Check if command is for this device
-      if (target == deviceId || target == "ALL" || target.startsWith("IV_INJECTOR")) {
-        Serial.printf("✅ Command matches our device!\n");
-        Serial.printf("Processing UDP command: %s\n", command.c_str());
-        
-        if (command == "led_color") {
-          uint8_t r = doc["r"];
-          uint8_t g = doc["g"];
-          uint8_t b = doc["b"];
-          Serial.printf("LED color command: RGB(%d, %d, %d)\n", r, g, b);
-          setLEDColor(r, g, b);
-          indicateActivity();
-        }
-        else if (command == "led_pattern") {
-          String pattern = doc["pattern"];
-          Serial.printf("LED pattern command: %s\n", pattern.c_str());
-          setLEDPattern(pattern);
-          indicateActivity();
-        }
-        else if (command == "set_sacn_universe") {
-          int universe = 1;
-          if (doc.containsKey("parameters") && doc["parameters"].containsKey("universe")) {
-            universe = doc["parameters"]["universe"];
-          } else if (doc.containsKey("universe")) {
-            universe = doc["universe"];
-          }
-          sacnUniverse = universe;
-          propConfig.setSACNUniverse(universe);
-          
-          // Restart sACN with new universe
-          if (sacnEnabled) {
-            sacnUdp.stop();
-            initializeSACN();
-          }
-          Serial.printf("sACN universe set to %d\n", universe);
-          if (commandId.length() > 0) {
-            sendResponse(commandId, "sACN universe set to " + String(universe));
-          }
-        }
-        else if (command == "set_sacn_address") {
-          int address = 1;
-          if (doc.containsKey("parameters") && doc["parameters"].containsKey("address")) {
-            address = doc["parameters"]["address"];
-          } else if (doc.containsKey("address")) {
-            address = doc["address"];
-          }
-          sacnStartAddress = address;
-          propConfig.setDMXStartAddress(address);
-          Serial.printf("sACN start address set to %d\n", address);
-          if (commandId.length() > 0) {
-            sendResponse(commandId, "sACN start address set to " + String(address));
-          }
-        }
-        else if (command == "status") {
-          Serial.println("Status request received");
-          sendPeriodicStatus();
-        }
-        else if (command == "ota_update") {
-          String firmwareUrl = "";
-          if (doc["parameters"].is<JsonObject>() && doc["parameters"]["firmware_url"].is<String>()) {
-            firmwareUrl = doc["parameters"]["firmware_url"].as<String>();
-          }
-          
-          if (firmwareUrl.length() > 0) {
-            Serial.printf("🔄 Starting OTA update from: %s\n", firmwareUrl.c_str());
-            if (commandId.length() > 0) {
-              sendResponse(commandId, "OTA update started");
-            }
-            
-            // Perform OTA update in background to avoid blocking the response
-            handleOTAUpdate(firmwareUrl, commandId);
-          } else {
-            Serial.println("❌ OTA update failed: No firmware URL provided");
-            if (commandId.length() > 0) {
-              sendResponse(commandId, "OTA update failed: No firmware URL provided");
-            }
-          }
-        }
-        else {
-          Serial.printf("⚠️  Unknown command: %s\n", command.c_str());
-        }
-        
-        lastActivity = millis();
-      } else {
-        Serial.printf("❌ Command not for us (target: '%s')\n", target.c_str());
-      }
-    } else {
-      Serial.printf("❌ JSON parse error: %s\n", error.c_str());
-      Serial.printf("Raw data was: %s\n", buffer);
-    }
-    Serial.println("=== UDP PROCESSING COMPLETE ===");
-  }
-}
-
 void initializeSACN() {
   if (!sacnEnabled) return;
   
@@ -887,10 +778,24 @@ void processSACNPacket(uint8_t* buffer, size_t length) {
   // Extract sequence number
   uint8_t sequence = buffer[111];
   
-  // Simple sequence checking (ignoring wrap-around for now)
-  if (sequence != 0 && sacnSequence != 0 && sequence <= sacnSequence) {
-    Serial.printf("Old/duplicate packet: seq %d <= %d\n", sequence, sacnSequence);
-    return; // Old or duplicate packet
+  // Improved sequence checking with wrap-around support
+  if (sequence != 0 && sacnSequence != 0) {
+    // Handle sequence wrap-around (255 -> 0)
+    int16_t seqDiff = sequence - sacnSequence;
+    if (seqDiff < -127) {
+      // Sequence wrapped around (e.g., sacnSequence=254, sequence=1)
+      seqDiff += 256;
+    }
+    
+    if (seqDiff <= 0) {
+      // Old or duplicate packet - only log occasionally to avoid spam
+      static unsigned long lastSeqWarn = 0;
+      if (millis() - lastSeqWarn > 1000) {
+        Serial.printf("Old/duplicate packet: seq %d <= %d\n", sequence, sacnSequence);
+        lastSeqWarn = millis();
+      }
+      return;
+    }
   }
   sacnSequence = sequence;
   
@@ -990,46 +895,18 @@ void setLEDPattern(String pattern) {
     deviceActive = true;
   }
   else if (pattern == "idle") {
-    setLEDColor(0, 64, 0);   // Dim green for idle
+    setLEDColor(0, 16, 0);   // Battery optimization: Very dim green for idle
     deviceActive = false;
   }
 }
 
 void indicateActivity() {
-  // Brief flash to indicate command received
-  strip.setPixelColor(0, strip.Color(255, 255, 255));  // White flash
+  // Battery optimization: Reduced brightness and duration for activity flash
+  strip.setPixelColor(0, strip.Color(64, 64, 64));  // Dimmer white flash (25% vs 100%)
   strip.show();
-  delay(50);
+  delay(25);  // Shorter flash duration (25ms vs 50ms)
   strip.setPixelColor(0, strip.Color(currentR, currentG, currentB));  // Back to current color
   strip.show();
-}
-
-void sendPeriodicStatus() {
-  JsonDocument doc;
-  doc["device_id"] = deviceId;
-  doc["device_type"] = deviceType;
-  doc["firmware_version"] = firmwareVersion;
-  doc["ip_address"] = WiFi.localIP().toString();
-  doc["online"] = true;
-  doc["active"] = deviceActive;
-  doc["led_color"] = String(currentR) + "," + String(currentG) + "," + String(currentB);
-  doc["brightness"] = ledBrightness;
-  doc["sacn_universe"] = sacnUniverse;
-  doc["dmx_address"] = sacnStartAddress;
-  doc["sacn_active"] = sacnActive;
-  doc["uptime"] = millis() / 1000;
-  doc["wifi_ssid"] = wifiSSID;
-  doc["last_activity"] = (millis() - lastActivity) / 1000;
-  
-  String status;
-  serializeJson(doc, status);
-  
-  // Broadcast status
-  udp.beginPacket("255.255.255.255", UDP_PORT);
-  udp.print(status);
-  udp.endPacket();
-  
-  Serial.printf("Status broadcast sent: %s\n", status.c_str());
 }
 
 void handleGetConfig(AsyncWebServerRequest *request) {
@@ -1097,52 +974,20 @@ void handleOTAUpdate(String firmwareUrl, String commandId) {
         Serial.println("OTA done!");
         if (Update.isFinished()) {
           Serial.println("Update successfully completed. Rebooting.");
-          if (commandId.length() > 0) {
-            sendResponse(commandId, "OTA update completed successfully - rebooting");
-          }
           delay(1000);
           ESP.restart();
         } else {
           Serial.println("Update not finished? Something went wrong!");
-          if (commandId.length() > 0) {
-            sendResponse(commandId, "OTA update failed - update not finished");
-          }
         }
       } else {
         Serial.println("Error Occurred. Error #: " + String(Update.getError()));
-        if (commandId.length() > 0) {
-          sendResponse(commandId, "OTA update failed - Error #: " + String(Update.getError()));
-        }
       }
     } else {
       Serial.println("Not enough space to begin OTA");
-      if (commandId.length() > 0) {
-        sendResponse(commandId, "OTA update failed - not enough space");
-      }
     }
   } else {
     Serial.printf("HTTP GET failed, error: %s\n", http.errorToString(httpCode).c_str());
-    if (commandId.length() > 0) {
-      sendResponse(commandId, "OTA update failed - HTTP GET failed: " + String(httpCode));
-    }
   }
   
   http.end();
-}
-
-void sendResponse(String commandId, String result) {
-  JsonDocument doc;
-  doc["commandId"] = commandId;
-  doc["result"] = result;
-  doc["timestamp"] = millis();
-  doc["deviceId"] = deviceId;
-  
-  String response;
-  serializeJson(doc, response);
-  
-  udp.beginPacket(currentSenderIP, currentSenderPort);
-  udp.write((const uint8_t*)response.c_str(), response.length());
-  udp.endPacket();
-  
-  Serial.printf("Sent response to %s:%d - %s\n", currentSenderIP.toString().c_str(), currentSenderPort, response.c_str());
 }

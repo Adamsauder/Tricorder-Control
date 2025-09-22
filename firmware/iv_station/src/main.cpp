@@ -203,7 +203,7 @@ const unsigned long STATUS_INTERVAL = 10000; // Send status every 10 seconds
 // sACN State Variables
 bool sacnEnabled = true;
 int sacnUniverse = 1;
-int sacnStartAddress = 1;  // DMX starting address for this device
+int sacnStartAddress = 201;  // DMX starting address for this device
 unsigned long lastSacnPacket = 0;
 uint8_t lastSacnData[512] = {0};  // Store last received DMX data
 bool sacnActive = false;  // True when receiving sACN data

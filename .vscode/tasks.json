@@ -1182,6 +1182,269 @@
 				"panel": "shared"
 			},
 			"problemMatcher": []
+		},
+		{
+			"label": "Compile Ostoregenerator Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/ostoregenerator"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/ostoregenerator"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Upload Ostoregenerator Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/ostoregenerator"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"owner": "cpp",
+				"fileLocation": [
+					"relative",
+					"${workspaceFolder}/firmware/ostoregenerator"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				}
+			}
+		},
+		{
+			"label": "Build and Upload Ostoregenerator",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile Ostoregenerator Firmware",
+				"Upload Ostoregenerator Firmware"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Monitor Ostoregenerator Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/ostoregenerator"
+			},
+			"group": "test",
+			"isBackground": true,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Compile Rainbow Display Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/rainbow_display"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": "$platformio"
+		},
+		{
+			"label": "Upload Rainbow Display Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/rainbow_display"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": "$platformio"
+		},
+		{
+			"label": "Build and Upload Rainbow Display",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile Rainbow Display Firmware",
+				"Upload Rainbow Display Firmware"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Monitor Rainbow Display Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/rainbow_display"
+			},
+			"group": "test",
+			"isBackground": true,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Compile Stepper Controller Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/stepper_controller"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"group": "firmware"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Upload Stepper Controller Firmware",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/stepper_controller"
+			},
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"group": "firmware"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Build and Upload Stepper Controller",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Compile Stepper Controller Firmware",
+				"Upload Stepper Controller Firmware"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Monitor Stepper Controller Serial",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"device",
+				"monitor"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/firmware/stepper_controller"
+			},
+			"group": "test",
+			"isBackground": true,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Build and Upload Stepper Controller",
+			"type": "shell",
+			"command": "pio",
+			"args": [
+				"run",
+				"--target",
+				"upload",
+				"--upload-port",
+				"${input:comPort}"
+			],
+			"group": "build"
 		}
 	]
 }
